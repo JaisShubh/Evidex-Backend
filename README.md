@@ -29,7 +29,7 @@ See [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md) for the routes and response s
 
 ## Verification
 
-See [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md). Fifteen backend unit/schema tests pass in this environment. The Atlas connection and ping succeeded. Full persisted API journeys, live Gemini requests and browser E2E checks have not been exercised in this run; Gemini and browser checks also need credentials and a running local API.
+See [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md). `npm test` runs the 15 unit/schema tests; `npm run test:integration` runs a MongoDB-backed API journey when `MONGODB_URI` and `JWT_SECRET` are configured in `.env`. The integration test uses a fresh random `evidex_it_*` database and drops it after the run. The persisted API journey and Atlas connection passed. Live Gemini requests and browser E2E checks remain unverified; they need provider credentials and a running UI/API environment.
 
 ## Limitations and planned scope
 

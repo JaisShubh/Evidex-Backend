@@ -3,6 +3,7 @@
 ## Automated checks run
 
 - `npm test` — 15 dashboard/matching/model tests passed: persisted-summary derivation, activity ordering, allowed resubmission states, scoring, configurable weights, unknown eligibility handling, excluded evidence statuses, and Mongoose ownership/status schemas.
+- `npm run test:integration` with `EVIDEX_INTEGRATION_TESTS=true` and configured `MONGODB_URI`/`JWT_SECRET` — passed against Atlas. It creates a uniquely named temporary database, runs the API journey, then drops that database. Coverage includes registration, missing/invalid tokens, role and owner checks, profile/project/evidence persistence, task attempt/submission/completeness verification/reviewer decision, sample Idea Lab analysis and saved experiment result, matching, applications and duplicate rejection, and dashboard counts.
 - `npm run build` in Frontend — production build passed.
 - `node --check` across backend JavaScript modules and a dynamic import of the Express app — passed.
 - MongoDB Atlas connection and `ping` using the configured Backend environment — passed.
@@ -11,7 +12,7 @@
 
 ## Blocked in this environment
 
-- The configured Atlas database is reachable, but full persisted API journeys and browser-based database flows remain unverified.
+- Browser-based database flows remain unverified.
 - Live Gemini request and browser-based end-to-end checks remain unverified. Configure a key and run both services on a machine that permits local networking.
 - `npm audit` could not reach the npm audit endpoint because network name resolution is unavailable. `npm install` reported 3 high-severity findings in Backend and 2 moderate in Frontend; resolve/review them with an online `npm audit` before deployment.
 
