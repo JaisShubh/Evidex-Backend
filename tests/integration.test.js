@@ -66,6 +66,7 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     };
 
     const student = await register('Integration Student');
+    const teamMate = await register('Integration Team Mate');
     const founder = await register('Integration Founder', 'founder');
     const reviewerUser = await register('Integration Reviewer');
     const appealReviewerUser = await register('Appeal Reviewer');
@@ -361,6 +362,22 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     assert.equal((await call('GET', `/api/briefs/${briefId}`, { token: student.token })).status, 200);
     assert.equal((await call('GET', `/api/tasks/${briefTaskId}`, { token: reviewerUser.token })).status, 404);
     assert.equal((await call('GET', `/api/tasks/${briefTaskId}`, { token: student.token })).status, 200);
+    const team = await call('POST', '/api/teams', { token: student.token, body: { briefId, name: 'Research team', goal: 'Prepare a practical evidence-backed plan.', requiredSkills: ['Research'], maxMembers: 2 } });
+    assert.equal(team.status, 201, JSON.stringify(team.payload));
+    const teamId = team.payload.data._id;
+    assert.equal((await call('GET', `/api/teams/${teamId}`, { token: reviewerUser.token })).status, 403);
+    assert.equal((await call('GET', `/api/tasks/${briefTaskId}`, { token: teamMate.token })).status, 404);
+    const teamInvitation = await call('POST', `/api/teams/${teamId}/invitations`, { token: student.token, body: { recipientId: teamMate.user.id } });
+    assert.equal(teamInvitation.status, 201, JSON.stringify(teamInvitation.payload));
+    assert.equal((await call('GET', '/api/team-invitations/me', { token: teamMate.token })).payload.data.length, 1);
+    const joinedTeam = await call('POST', `/api/team-invitations/${teamInvitation.payload.data._id}/respond`, { token: teamMate.token, body: { status: 'accepted' } });
+    assert.equal(joinedTeam.status, 200, JSON.stringify(joinedTeam.payload));
+    assert.equal(joinedTeam.payload.data.team.members.length, 2);
+    assert.equal((await call('GET', `/api/teams/${teamId}`, { token: teamMate.token })).status, 200);
+    assert.equal((await call('GET', `/api/tasks/${briefTaskId}`, { token: teamMate.token })).status, 200);
+    assert.equal((await call('POST', `/api/teams/${teamId}/leave`, { token: teamMate.token })).payload.data.left, true);
+    assert.equal((await call('GET', `/api/teams/${teamId}`, { token: teamMate.token })).status, 404);
+    assert.equal((await call('GET', `/api/tasks/${briefTaskId}`, { token: teamMate.token })).status, 404);
     const briefAttempt = await call('POST', `/api/tasks/${briefTaskId}/attempts`, { token: student.token });
     assert.equal(briefAttempt.status, 201, JSON.stringify(briefAttempt.payload));
     const briefSubmission = await call('POST', `/api/attempts/${briefAttempt.payload.data._id}/submissions`, {

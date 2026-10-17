@@ -10,7 +10,7 @@ import { User } from './models/User.js';
 import { Project, Evidence, Task, Attempt, Submission, VerificationRun, Review, Appeal } from './models/Work.js';
 import { Idea, IdeaAnalysis, IdeaResearch, Experiment, ExperimentResult, Opportunity, MatchResult, Application } from './models/Venture.js';
 import { ProfileShare } from './models/Sharing.js';
-import { Brief, Invitation, ResourceSwap } from './models/Collaboration.js';
+import { Brief, Invitation, ResourceSwap, Team, TeamInvitation } from './models/Collaboration.js';
 import { RepositoryCheck } from './models/RepositoryCheck.js';
 import { requireAuth, requireRole } from './middleware/auth.js';
 import { deconstructIdea, draftBusinessBrief } from './services/gemini.service.js';
@@ -30,7 +30,7 @@ const ok = (res, data, status=200) => res.status(status).json({ data });
 const cleanUser = (u) => ({ id: u._id, name: u.name, email: u.email, role: u.role, status: u.status, profile: u.profile });
 const asyncRoute = (fn) => (req,res,next) => Promise.resolve(fn(req,res,next)).catch(next);
 const text = (max) => z.string().trim().max(max);
-const canAccessTask = async (user,task) => task.visibility!=='invite_only'||String(task.ownerId)===user.id||Boolean(await Invitation.exists({briefId:task.briefId,recipientId:user.id,status:'accepted'}));
+const canAccessTask = async (user,task) => task.visibility!=='invite_only'||String(task.ownerId)===user.id||Boolean(await Invitation.exists({briefId:task.briefId,recipientId:user.id,status:'accepted'}))||Boolean(await Team.exists({briefId:task.briefId,status:'open','members.userId':user.id}));
 const registerSchema = z.object({ name: text(80).min(1), email: z.string().email().max(254), password: z.string().min(10).max(100), role: z.enum(['student','founder']).optional() });
 app.get('/api/health', asyncRoute(async (_req,res) => { const database=(await import('mongoose')).default.connection.readyState===1?'connected':'disconnected';const status=database==='connected'?'ok':'degraded';return res.status(status==='ok'?200:503).json({data:{status,database}}); }));
 app.post('/api/auth/register', authLimiter, asyncRoute(async (req,res) => { const input=registerSchema.parse(req.body); const email=input.email.toLowerCase(); if(await User.exists({email})) return res.status(409).json({error:{code:'EMAIL_EXISTS',message:'An account with this email already exists.'}}); const user=await User.create({name:input.name,email,passwordHash:await bcrypt.hash(input.password,12),role:input.role||'student',profile:{displayName:input.name}}); const token=jwt.sign({id:user.id,role:user.role,tokenVersion:user.tokenVersion},process.env.JWT_SECRET,{expiresIn:'7d'}); return ok(res,{user:cleanUser(user),token},201); }));
@@ -401,6 +401,58 @@ app.post('/api/invitations/:id/respond',asyncRoute(async(req,res)=>{
   if(input.status==='accepted')invitation.consentAt=new Date();
   await invitation.save();
   ok(res,invitation);
+}));
+app.post('/api/teams',requireRole('student'),asyncRoute(async(req,res)=>{
+  const input=z.object({briefId:z.string().regex(/^[a-f\d]{24}$/i),name:text(120).min(1),goal:text(1000).min(1),requiredSkills:z.array(text(60).min(1)).max(20).default([]),maxMembers:z.number().int().min(2).max(8).default(4)}).strict().parse(req.body);
+  const brief=await Brief.findOne({_id:input.briefId,status:'published'});
+  if(!brief||!await Invitation.exists({briefId:brief.id,recipientId:req.user.id,status:'accepted'}))return res.status(404).json({error:{code:'NOT_FOUND',message:'Accepted brief not found.'}});
+  const team=await Team.create({...input,ownerId:req.user.id,members:[{userId:req.user.id}]});
+  ok(res,team,201);
+}));
+app.get('/api/teams/me',requireRole('student'),asyncRoute(async(req,res)=>ok(res,await Team.find({'members.userId':req.user.id}).sort({updatedAt:-1}).populate('briefId','title desiredOutcome status').populate('members.userId','name profile.displayName profile.skills.name'))));
+app.get('/api/teams/:id',requireRole('student'),asyncRoute(async(req,res)=>{
+  const team=await Team.findOne({_id:req.params.id,'members.userId':req.user.id}).populate('briefId','title desiredOutcome status').populate('members.userId','name profile.displayName profile.skills.name');
+  return team?ok(res,team):res.status(404).json({error:{code:'NOT_FOUND',message:'Team not found.'}});
+}));
+app.post('/api/teams/:id/invitations',requireRole('student'),asyncRoute(async(req,res)=>{
+  const team=await Team.findOne({_id:req.params.id,ownerId:req.user.id,status:'open'});
+  if(!team)return res.status(404).json({error:{code:'NOT_FOUND',message:'Open team not found.'}});
+  if(team.members.length>=team.maxMembers)return res.status(409).json({error:{code:'TEAM_FULL',message:'This team has reached its member limit.'}});
+  const input=z.object({recipientId:z.string().regex(/^[a-f\d]{24}$/i)}).strict().parse(req.body);
+  if(input.recipientId===req.user.id||team.members.some(member=>String(member.userId)===input.recipientId))return res.status(400).json({error:{code:'VALIDATION_ERROR',message:'This user is already part of the team.'}});
+  if(!await User.exists({_id:input.recipientId,role:'student',status:'active'}))return res.status(404).json({error:{code:'NOT_FOUND',message:'Active student account not found.'}});
+  ok(res,await TeamInvitation.create({teamId:team.id,senderId:req.user.id,recipientId:input.recipientId}),201);
+}));
+app.get('/api/team-invitations/me',requireRole('student'),asyncRoute(async(req,res)=>ok(res,await TeamInvitation.find({recipientId:req.user.id}).sort({createdAt:-1}).populate({path:'teamId',select:'briefId ownerId name goal requiredSkills maxMembers status'}))));
+app.post('/api/team-invitations/:id/respond',requireRole('student'),asyncRoute(async(req,res)=>{
+  const input=z.object({status:z.enum(['accepted','declined'])}).strict().parse(req.body);
+  const invitation=await TeamInvitation.findOne({_id:req.params.id,recipientId:req.user.id,status:'pending'});
+  if(!invitation)return res.status(404).json({error:{code:'NOT_FOUND',message:'Pending team invitation not found.'}});
+  if(input.status==='declined'){
+    invitation.status='declined';invitation.decidedAt=new Date();await invitation.save();return ok(res,invitation);
+  }
+  const team=await Team.findById(invitation.teamId);
+  if(!team||team.status!=='open')return res.status(409).json({error:{code:'TEAM_CLOSED',message:'This team is no longer open.'}});
+  const addMember=await Team.updateOne({_id:team.id,status:'open','members.userId':{$ne:req.user.id},$expr:{$lt:[{$size:'$members'},'$maxMembers']}},{$push:{members:{userId:req.user.id,joinedAt:new Date()}}});
+  if(!addMember.modifiedCount)return res.status(409).json({error:{code:'TEAM_FULL',message:'This team is full or no longer open.'}});
+  try{
+    if(!await Brief.exists({_id:team.briefId,status:'published'}))throw Object.assign(new Error('Brief is no longer available.'),{status:409,code:'BRIEF_CLOSED'});
+    invitation.status='accepted';invitation.consentAt=new Date();invitation.decidedAt=new Date();await invitation.save();
+  }catch(error){await Team.updateOne({_id:team.id},{$pull:{members:{userId:req.user.id}}});throw error;}
+  ok(res,{invitation,team:await Team.findById(team.id)});
+}));
+app.post('/api/teams/:id/leave',requireRole('student'),asyncRoute(async(req,res)=>{
+  const team=await Team.findOne({_id:req.params.id,'members.userId':req.user.id});
+  if(!team)return res.status(404).json({error:{code:'NOT_FOUND',message:'Team not found.'}});
+  if(String(team.ownerId)===req.user.id)return res.status(409).json({error:{code:'OWNER_CANNOT_LEAVE',message:'The team owner must close the team instead.'}});
+  await Team.updateOne({_id:team.id},{$pull:{members:{userId:req.user.id}}});
+  ok(res,{teamId:team.id,left:true});
+}));
+app.post('/api/teams/:id/close',requireRole('student'),asyncRoute(async(req,res)=>{
+  const team=await Team.findOneAndUpdate({_id:req.params.id,ownerId:req.user.id,status:'open'},{$set:{status:'closed'}},{new:true});
+  if(!team)return res.status(404).json({error:{code:'NOT_FOUND',message:'Open team not found.'}});
+  await TeamInvitation.updateMany({teamId:team.id,status:'pending'},{$set:{status:'cancelled',decidedAt:new Date()}});
+  ok(res,{id:team.id,status:team.status});
 }));
 app.get('/api/briefs/:id/submissions',requireRole('founder','admin'),asyncRoute(async(req,res)=>{
   const brief=await Brief.findById(req.params.id);

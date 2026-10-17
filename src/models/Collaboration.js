@@ -51,3 +51,27 @@ const swapSchema = new Schema({
 }, { timestamps: true });
 
 export const ResourceSwap = mongoose.model('ResourceSwap', swapSchema);
+
+const teamSchema = new Schema({
+  briefId: { type: Schema.Types.ObjectId, ref: 'Brief', required: true, index: true },
+  ownerId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  name: { type: String, required: true, trim: true, maxlength: 120 },
+  goal: { type: String, required: true, trim: true, maxlength: 1000 },
+  requiredSkills: [{ type: String, trim: true, maxlength: 60 }],
+  maxMembers: { type: Number, min: 2, max: 8, default: 4 },
+  status: { type: String, enum: ['open','closed'], default: 'open' },
+  members: [{ userId: { type: Schema.Types.ObjectId, ref: 'User', required: true }, joinedAt: { type: Date, default: Date.now } }],
+}, { timestamps: true });
+teamSchema.index({ briefId: 1, ownerId: 1 }, { unique: true });
+export const Team = mongoose.model('Team', teamSchema);
+
+const teamInviteSchema = new Schema({
+  teamId: { type: Schema.Types.ObjectId, ref: 'Team', required: true, index: true },
+  senderId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+  recipientId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  status: { type: String, enum: ['pending','accepted','declined','cancelled'], default: 'pending' },
+  consentAt: Date,
+  decidedAt: Date,
+}, { timestamps: true });
+teamInviteSchema.index({ teamId: 1, recipientId: 1 }, { unique: true });
+export const TeamInvitation = mongoose.model('TeamInvitation', teamInviteSchema);
