@@ -296,6 +296,60 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     assert.equal(result.status, 201, JSON.stringify(result.payload));
     assert.equal((await call('GET', `/api/ideas/${idea.payload.data._id}/results`, { token: student.token })).payload.data.length, 1);
 
+    const briefCreated = await call('POST', '/api/briefs', {
+      token: founder.token,
+      body: { title: 'Integration business brief', problem: 'A scoped test problem.', desiredOutcome: 'A concise research plan.', constraints: 'Use synthetic data only.', effortEstimate: 'Two hours', requiredSkills: ['Research'], deliverables: [{ name: 'Plan', required: true, instructions: 'Describe a safe validation plan.' }], rubric: [{ criterion: 'Clarity', points: 10, description: 'The plan is clear.' }], source: 'ai' },
+    });
+    assert.equal(briefCreated.status, 201, JSON.stringify(briefCreated.payload));
+    const briefId = briefCreated.payload.data._id;
+    assert.equal((await call('POST', `/api/briefs/${briefId}/publish`, { token: founder.token })).payload.error.code, 'APPROVAL_REQUIRED');
+    assert.equal((await call('GET', `/api/briefs/${briefId}`, { token: student.token })).status, 404);
+    assert.equal((await call('POST', `/api/briefs/${briefId}/approve`, { token: founder.token })).status, 403);
+    const approvedBrief = await call('POST', `/api/briefs/${briefId}/approve`, { token: adminToken });
+    assert.equal(approvedBrief.status, 200);
+    const publishedBrief = await call('POST', `/api/briefs/${briefId}/publish`, { token: founder.token });
+    assert.equal(publishedBrief.status, 200, JSON.stringify(publishedBrief.payload));
+    const briefTaskId = publishedBrief.payload.data.task._id;
+    const invitation = await call('POST', `/api/briefs/${briefId}/invitations`, {
+      token: founder.token, body: { recipientId: student.user.id, message: 'Please opt in to this private trial.' },
+    });
+    assert.equal(invitation.status, 201, JSON.stringify(invitation.payload));
+    assert.equal(invitation.payload.data.briefVersion, 1);
+    assert.equal((await call('POST', `/api/invitations/${invitation.payload.data._id}/respond`, { token: reviewerUser.token, body: { status: 'accepted' } })).status, 404);
+    const acceptedInvitation = await call('POST', `/api/invitations/${invitation.payload.data._id}/respond`, { token: student.token, body: { status: 'accepted' } });
+    assert.equal(acceptedInvitation.status, 200);
+    assert.ok(acceptedInvitation.payload.data.consentAt);
+    assert.equal((await call('GET', `/api/briefs/${briefId}`, { token: student.token })).status, 200);
+    assert.equal((await call('GET', `/api/tasks/${briefTaskId}`, { token: reviewerUser.token })).status, 404);
+    assert.equal((await call('GET', `/api/tasks/${briefTaskId}`, { token: student.token })).status, 200);
+    const briefAttempt = await call('POST', `/api/tasks/${briefTaskId}/attempts`, { token: student.token });
+    assert.equal(briefAttempt.status, 201, JSON.stringify(briefAttempt.payload));
+    const briefSubmission = await call('POST', `/api/attempts/${briefAttempt.payload.data._id}/submissions`, {
+      token: student.token, body: { deliverables: [{ name: 'Plan', value: 'A synthetic-data validation plan.' }] },
+    });
+    assert.equal(briefSubmission.status, 201, JSON.stringify(briefSubmission.payload));
+    const briefSubmissions = await call('GET', `/api/briefs/${briefId}/submissions`, { token: founder.token });
+    assert.equal(briefSubmissions.status, 200);
+    assert.equal(briefSubmissions.payload.data.submissions.length, 1);
+    assert.equal(briefSubmissions.payload.data.submissions[0].attemptId.taskVersion, 1);
+
+    const resourceSwap = await call('POST', '/api/resource-swaps', {
+      token: student.token,
+      body: { recipientId: reviewerUser.user.id, offer: 'Two hours of usability feedback.', request: 'Review a research outline.', terms: 'Schedule together; no payments or guaranteed delivery.' },
+    });
+    assert.equal(resourceSwap.status, 201, JSON.stringify(resourceSwap.payload));
+    const swapId = resourceSwap.payload.data._id;
+    assert.equal((await call('GET', `/api/resource-swaps/${swapId}`, { token: adminUser.token })).status, 404);
+    assert.equal((await call('POST', `/api/resource-swaps/${swapId}/respond`, { token: student.token, body: { status: 'accepted' } })).status, 404);
+    assert.equal((await call('POST', `/api/resource-swaps/${swapId}/respond`, { token: reviewerUser.token, body: { status: 'accepted' } })).status, 200);
+    const proposerConfirmation = await call('POST', `/api/resource-swaps/${swapId}/confirm`, { token: student.token });
+    assert.equal(proposerConfirmation.status, 200);
+    assert.equal(proposerConfirmation.payload.data.status, 'accepted');
+    const recipientConfirmation = await call('POST', `/api/resource-swaps/${swapId}/confirm`, { token: reviewerUser.token });
+    assert.equal(recipientConfirmation.status, 200);
+    assert.equal(recipientConfirmation.payload.data.status, 'completed');
+    assert.equal(recipientConfirmation.payload.data.confirmations.length, 2);
+
     const opportunityCreated = await call('POST', '/api/opportunities', {
       token: founder.token,
       body: { title: 'Integration opportunity', provider: 'Temporary test provider', description: 'Temporary test record.', requiredSkills: ['Research'], eligibility: [] },
@@ -345,15 +399,15 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
 
     const dashboard = await call('GET', '/api/dashboard', { token: student.token });
     assert.equal(dashboard.status, 200, JSON.stringify(dashboard.payload));
-    assert.equal(dashboard.payload.data.counts.evidenceItems, 5);
+    assert.equal(dashboard.payload.data.counts.evidenceItems, 6);
     assert.equal(dashboard.payload.data.counts.tasksCompleted, 1);
 
     assert.equal((await call('DELETE', `/api/evidence/${unsharedEvidence.payload.data._id}`, { token: student.token })).status, 200);
     assert.equal((await call('DELETE', `/api/evidence/${evidence.payload.data._id}`, { token: student.token })).status, 200);
     const profileAfterArchive = await call('GET', '/api/profile/me', { token: student.token });
     assert.deepEqual(profileAfterArchive.payload.data.profile.skills[0].evidenceIds, []);
-    assert.equal((await call('GET', '/api/evidence/me', { token: student.token })).payload.data.length, 3);
-    assert.equal((await call('GET', '/api/dashboard', { token: student.token })).payload.data.counts.evidenceItems, 3);
+    assert.equal((await call('GET', '/api/evidence/me', { token: student.token })).payload.data.length, 4);
+    assert.equal((await call('GET', '/api/dashboard', { token: student.token })).payload.data.counts.evidenceItems, 4);
     assert.equal((await call('DELETE', `/api/projects/${project.payload.data._id}`, { token: student.token })).status, 200);
     assert.equal((await call('GET', '/api/projects/me', { token: student.token })).payload.data.length, 0);
     assert.equal((await call('DELETE', `/api/projects/${otherProject.payload.data._id}`, { token: reviewerUser.token })).status, 200);
@@ -362,6 +416,8 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     assert.equal((await call('GET', '/api/opportunities', { token: student.token })).payload.data.length, 1);
     assert.equal((await call('DELETE', `/api/opportunities/${withdrawalOpportunity.payload.data._id}`, { token: adminToken })).status, 200);
     assert.equal((await call('GET', '/api/opportunities', { token: student.token })).payload.data.length, 0);
+    assert.equal((await call('DELETE', `/api/briefs/${briefId}`, { token: founder.token })).status, 200);
+    assert.equal((await call('GET', `/api/tasks/${briefTaskId}`, { token: student.token })).status, 404);
     const archivedTask = await call('DELETE', `/api/admin/tasks/${taskId}`, { token: adminToken });
     assert.equal(archivedTask.status, 200);
     assert.equal(archivedTask.payload.data.status, 'archived');

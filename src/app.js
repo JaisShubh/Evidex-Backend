@@ -10,6 +10,7 @@ import { User } from './models/User.js';
 import { Project, Evidence, Task, Attempt, Submission, VerificationRun, Review, Appeal } from './models/Work.js';
 import { Idea, IdeaAnalysis, IdeaResearch, Experiment, ExperimentResult, Opportunity, MatchResult, Application } from './models/Venture.js';
 import { ProfileShare } from './models/Sharing.js';
+import { Brief, Invitation, ResourceSwap } from './models/Collaboration.js';
 import { requireAuth, requireRole } from './middleware/auth.js';
 import { deconstructIdea } from './services/gemini.service.js';
 import { calculateMatch } from './services/matching.service.js';
@@ -26,6 +27,7 @@ const ok = (res, data, status=200) => res.status(status).json({ data });
 const cleanUser = (u) => ({ id: u._id, name: u.name, email: u.email, role: u.role, status: u.status, profile: u.profile });
 const asyncRoute = (fn) => (req,res,next) => Promise.resolve(fn(req,res,next)).catch(next);
 const text = (max) => z.string().trim().max(max);
+const canAccessTask = async (user,task) => task.visibility!=='invite_only'||String(task.ownerId)===user.id||Boolean(await Invitation.exists({briefId:task.briefId,recipientId:user.id,status:'accepted'}));
 const registerSchema = z.object({ name: text(80).min(1), email: z.string().email().max(254), password: z.string().min(10).max(100), role: z.enum(['student','founder']).optional() });
 app.get('/api/health', asyncRoute(async (_req,res) => { const database=(await import('mongoose')).default.connection.readyState===1?'connected':'disconnected';const status=database==='connected'?'ok':'degraded';return res.status(status==='ok'?200:503).json({data:{status,database}}); }));
 app.post('/api/auth/register', authLimiter, asyncRoute(async (req,res) => { const input=registerSchema.parse(req.body); const email=input.email.toLowerCase(); if(await User.exists({email})) return res.status(409).json({error:{code:'EMAIL_EXISTS',message:'An account with this email already exists.'}}); const user=await User.create({name:input.name,email,passwordHash:await bcrypt.hash(input.password,12),role:input.role||'student',profile:{displayName:input.name}}); const token=jwt.sign({id:user.id,role:user.role,tokenVersion:user.tokenVersion},process.env.JWT_SECRET,{expiresIn:'7d'}); return ok(res,{user:cleanUser(user),token},201); }));
@@ -189,11 +191,11 @@ app.delete('/api/admin/tasks/:id',requireRole('admin'),asyncRoute(async(req,res)
   await task.save();
   ok(res,{id:task.id,status:task.status,version:task.version});
 }));
-app.get('/api/tasks',asyncRoute(async(_req,res)=>ok(res,await Task.find({status:'published'}).sort({createdAt:-1}))));
-app.get('/api/tasks/:id',asyncRoute(async(req,res)=>{const task=await Task.findOne({_id:req.params.id,status:'published'});return task?ok(res,task):res.status(404).json({error:{code:'NOT_FOUND',message:'Task not found.'}});}));
+app.get('/api/tasks',asyncRoute(async(req,res)=>{const invitations=await Invitation.find({recipientId:req.user.id,status:'accepted'}).select('briefId');const briefIds=invitations.map(item=>item.briefId);ok(res,await Task.find({status:'published',$or:[{visibility:'public'},{visibility:{$exists:false}},{ownerId:req.user.id},{briefId:{$in:briefIds}}]}).sort({createdAt:-1}));}));
+app.get('/api/tasks/:id',asyncRoute(async(req,res)=>{const task=await Task.findOne({_id:req.params.id,status:'published'});if(!task||!await canAccessTask(req.user,task))return res.status(404).json({error:{code:'NOT_FOUND',message:'Task not found.'}});ok(res,task);}));
 app.post('/api/tasks/:id/attempts',asyncRoute(async(req,res)=>{
   const task=await Task.findOne({_id:req.params.id,status:'published'});
-  if(!task)return res.status(404).json({error:{code:'NOT_FOUND',message:'Task not found.'}});
+  if(!task||!await canAccessTask(req.user,task))return res.status(404).json({error:{code:'NOT_FOUND',message:'Task not found.'}});
   const taskSnapshot={title:task.title,goal:task.goal,description:task.description,category:task.category,difficulty:task.difficulty,requiredSkills:task.requiredSkills,deliverables:task.deliverables.map(({name,required})=>({name,required})),rubric:task.rubric.map(({criterion,points,description})=>({criterion,points,description})),allowedTools:task.allowedTools};
   ok(res,await Attempt.create({taskId:task.id,userId:req.user.id,taskVersion:task.version,taskSnapshot}),201);
 }));
@@ -297,6 +299,116 @@ app.get('/api/ideas/:id/analyses',asyncRoute(async(req,res)=>{const idea=await I
 app.get('/api/ideas/:id/results',asyncRoute(async(req,res)=>{const idea=await Idea.exists({_id:req.params.id,userId:req.user.id});if(!idea)return res.status(404).json({error:{code:'NOT_FOUND',message:'Idea not found.'}});const experiments=await Experiment.find({ideaId:req.params.id,userId:req.user.id}).select('_id');ok(res,await ExperimentResult.find({experimentId:{$in:experiments.map(e=>e._id)},userId:req.user.id}).sort({createdAt:-1}));}));
 app.get('/api/ideas/:id/experiments',asyncRoute(async(req,res)=>{const idea=await Idea.exists({_id:req.params.id,userId:req.user.id});if(!idea)return res.status(404).json({error:{code:'NOT_FOUND',message:'Idea not found.'}});ok(res,await Experiment.find({ideaId:req.params.id,userId:req.user.id}).sort({createdAt:-1}));}));
 app.post('/api/experiments/:id/results',asyncRoute(async(req,res)=>{const exp=await Experiment.findOne({_id:req.params.id,userId:req.user.id});if(!exp)return res.status(404).json({error:{code:'NOT_FOUND',message:'Experiment not found.'}});const input=z.object({observations:text(4000).min(1),metricValue:text(300).optional(),outcome:z.enum(['supported','contradicted','inconclusive']).optional(),evidenceIds:z.array(z.string().regex(/^[a-f\d]{24}$/i)).max(20).optional(),limitations:text(1000).optional()}).parse(req.body);if(input.evidenceIds?.length){const count=await Evidence.countDocuments({_id:{$in:input.evidenceIds},userId:req.user.id,archivedAt:null});if(count!==new Set(input.evidenceIds).size)return res.status(404).json({error:{code:'NOT_FOUND',message:'One or more evidence records were not found.'}});}const result=await ExperimentResult.create({...input,experimentId:exp.id,userId:req.user.id});exp.status='recorded';await exp.save();await Idea.findOneAndUpdate({_id:exp.ideaId,userId:req.user.id},{status:input.outcome||'test_recorded'});ok(res,result,201);}));
+const briefSchema=z.object({title:text(160).min(1),problem:text(4000).min(1),desiredOutcome:text(2000).min(1),constraints:text(2000).optional(),effortEstimate:text(200).optional(),requiredSkills:z.array(text(60).min(1)).max(30).default([]),deliverables:z.array(z.object({name:text(120).min(1),required:z.boolean().default(true),instructions:text(1000).optional()}).strict()).min(1).max(20),rubric:z.array(z.object({criterion:text(120).min(1),points:z.number().positive(),description:text(1000).min(1)}).strict()).min(1).max(20),allowedTools:text(500).optional(),source:z.enum(['owner','ai']).optional()}).strict();
+app.get('/api/briefs',asyncRoute(async(_req,res)=>ok(res,await Brief.find({status:'published'}).select('title desiredOutcome effortEstimate requiredSkills version createdAt').sort({createdAt:-1}))));
+app.get('/api/briefs/me',requireRole('founder','admin'),asyncRoute(async(req,res)=>ok(res,await Brief.find(req.user.role==='admin'?{}:{ownerId:req.user.id}).sort({updatedAt:-1}))));
+app.post('/api/briefs',requireRole('founder','admin'),asyncRoute(async(req,res)=>{const input=briefSchema.parse(req.body);ok(res,await Brief.create({...input,ownerId:req.user.id,status:'draft',version:1,source:input.source||'owner'}),201);}));
+app.get('/api/briefs/:id',asyncRoute(async(req,res)=>{
+  const brief=await Brief.findById(req.params.id);
+  if(!brief)return res.status(404).json({error:{code:'NOT_FOUND',message:'Brief not found.'}});
+  const isOwner=String(brief.ownerId)===req.user.id||req.user.role==='admin';
+  const hasAcceptedInvite=brief.status==='published'&&await Invitation.exists({briefId:brief.id,recipientId:req.user.id,status:'accepted'});
+  if(!isOwner&&!hasAcceptedInvite)return res.status(404).json({error:{code:'NOT_FOUND',message:'Brief not found.'}});
+  ok(res,brief);
+}));
+app.patch('/api/briefs/:id',requireRole('founder','admin'),asyncRoute(async(req,res)=>{
+  const fields=briefSchema.partial().refine(value=>Object.keys(value).length>0).parse(req.body);
+  const brief=await Brief.findOne({_id:req.params.id,status:'draft'});
+  if(!brief||req.user.role!=='admin'&&String(brief.ownerId)!==req.user.id)return res.status(404).json({error:{code:'NOT_FOUND',message:'Draft brief not found.'}});
+  Object.assign(brief,fields);
+  brief.version+=1;
+  brief.approvedBy=undefined;
+  brief.approvedAt=undefined;
+  await brief.save();
+  ok(res,brief);
+}));
+app.post('/api/briefs/:id/approve',requireRole('admin'),asyncRoute(async(req,res)=>{
+  const brief=await Brief.findOne({_id:req.params.id,status:'draft'});
+  if(!brief)return res.status(404).json({error:{code:'NOT_FOUND',message:'Draft brief not found.'}});
+  brief.approvedBy=req.user.id;
+  brief.approvedAt=new Date();
+  await brief.save();
+  ok(res,{id:brief.id,approvedAt:brief.approvedAt});
+}));
+app.post('/api/briefs/:id/publish',requireRole('founder','admin'),asyncRoute(async(req,res)=>{
+  const brief=await Brief.findOne({_id:req.params.id,status:'draft'});
+  if(!brief||req.user.role!=='admin'&&String(brief.ownerId)!==req.user.id)return res.status(404).json({error:{code:'NOT_FOUND',message:'Draft brief not found.'}});
+  if(brief.source==='ai'&&!brief.approvedAt)return res.status(409).json({error:{code:'APPROVAL_REQUIRED',message:'Review and approve the AI-drafted brief before publishing.'}});
+  const task=await Task.create({title:brief.title,goal:brief.desiredOutcome,description:[brief.problem,brief.constraints&&`Constraints: ${brief.constraints}`].filter(Boolean).join('\n\n').slice(0,5000),category:'Business brief',difficulty:'Intermediate',requiredSkills:brief.requiredSkills,deliverables:brief.deliverables.map(({name,required})=>({name,required})),rubric:brief.rubric,allowedTools:brief.allowedTools||'Any tools; disclose AI assistance.',visibility:'invite_only',ownerId:brief.ownerId,briefId:brief.id,version:brief.version,status:'published'});
+  brief.status='published';
+  brief.taskId=task.id;
+  await brief.save();
+  ok(res,{brief,task},200);
+}));
+app.delete('/api/briefs/:id',requireRole('founder','admin'),asyncRoute(async(req,res)=>{
+  const brief=await Brief.findOne({_id:req.params.id,status:{$ne:'archived'}});
+  if(!brief||req.user.role!=='admin'&&String(brief.ownerId)!==req.user.id)return res.status(404).json({error:{code:'NOT_FOUND',message:'Brief not found.'}});
+  brief.status='archived';
+  if(brief.taskId)await Task.findByIdAndUpdate(brief.taskId,{status:'archived'});
+  await Invitation.updateMany({briefId:brief.id,status:'pending'},{$set:{status:'cancelled',decidedAt:new Date()}});
+  await brief.save();
+  ok(res,{id:brief.id,status:brief.status});
+}));
+app.post('/api/briefs/:id/invitations',requireRole('founder','admin'),asyncRoute(async(req,res)=>{
+  const brief=await Brief.findOne({_id:req.params.id,status:'published'});
+  if(!brief||req.user.role!=='admin'&&String(brief.ownerId)!==req.user.id)return res.status(404).json({error:{code:'NOT_FOUND',message:'Published brief not found.'}});
+  const input=z.object({recipientId:z.string().regex(/^[a-f\d]{24}$/i),message:text(1000).optional()}).strict().parse(req.body);
+  if(input.recipientId===req.user.id)return res.status(400).json({error:{code:'VALIDATION_ERROR',message:'You cannot invite yourself.'}});
+  if(!await User.exists({_id:input.recipientId,status:'active'}))return res.status(404).json({error:{code:'NOT_FOUND',message:'Candidate account not found.'}});
+  ok(res,await Invitation.create({briefId:brief.id,taskId:brief.taskId,senderId:req.user.id,recipientId:input.recipientId,briefVersion:brief.version,message:input.message||''}),201);
+}));
+app.get('/api/invitations/me',asyncRoute(async(req,res)=>ok(res,await Invitation.find({recipientId:req.user.id}).sort({createdAt:-1}).populate('briefId','title desiredOutcome version status'))));
+app.post('/api/invitations/:id/respond',asyncRoute(async(req,res)=>{
+  const input=z.object({status:z.enum(['accepted','declined'])}).strict().parse(req.body);
+  const invitation=await Invitation.findOne({_id:req.params.id,recipientId:req.user.id,status:'pending'});
+  if(!invitation)return res.status(404).json({error:{code:'NOT_FOUND',message:'Pending invitation not found.'}});
+  invitation.status=input.status;
+  invitation.decidedAt=new Date();
+  if(input.status==='accepted')invitation.consentAt=new Date();
+  await invitation.save();
+  ok(res,invitation);
+}));
+app.get('/api/briefs/:id/submissions',requireRole('founder','admin'),asyncRoute(async(req,res)=>{
+  const brief=await Brief.findById(req.params.id);
+  if(!brief||req.user.role!=='admin'&&String(brief.ownerId)!==req.user.id)return res.status(404).json({error:{code:'NOT_FOUND',message:'Brief not found.'}});
+  if(!brief.taskId)return ok(res,{briefVersion:brief.version,submissions:[]});
+  const attempts=await Attempt.find({taskId:brief.taskId}).select('_id userId taskVersion status startedAt submittedAt');
+  const submissions=await Submission.find({attemptId:{$in:attempts.map(item=>item._id)}}).sort({submittedAt:1}).populate('attemptId','userId taskVersion status');
+  ok(res,{briefVersion:brief.version,submissions});
+}));
+app.post('/api/resource-swaps',asyncRoute(async(req,res)=>{
+  const input=z.object({recipientId:z.string().regex(/^[a-f\d]{24}$/i),offer:text(2000).min(1),request:text(2000).min(1),terms:text(2000).min(1)}).strict().parse(req.body);
+  if(input.recipientId===req.user.id)return res.status(400).json({error:{code:'VALIDATION_ERROR',message:'A resource swap needs another participant.'}});
+  if(!await User.exists({_id:input.recipientId,status:'active'}))return res.status(404).json({error:{code:'NOT_FOUND',message:'Recipient account not found.'}});
+  ok(res,await ResourceSwap.create({...input,proposerId:req.user.id,status:'proposed'}),201);
+}));
+app.get('/api/resource-swaps/me',asyncRoute(async(req,res)=>ok(res,await ResourceSwap.find({$or:[{proposerId:req.user.id},{recipientId:req.user.id}]}).sort({createdAt:-1}))));
+app.get('/api/resource-swaps/:id',asyncRoute(async(req,res)=>{const swap=await ResourceSwap.findOne({_id:req.params.id,$or:[{proposerId:req.user.id},{recipientId:req.user.id}]});return swap?ok(res,swap):res.status(404).json({error:{code:'NOT_FOUND',message:'Resource swap not found.'}});}));
+app.post('/api/resource-swaps/:id/respond',asyncRoute(async(req,res)=>{
+  const input=z.object({status:z.enum(['accepted','declined'])}).strict().parse(req.body);
+  const swap=await ResourceSwap.findOne({_id:req.params.id,recipientId:req.user.id,status:'proposed'});
+  if(!swap)return res.status(404).json({error:{code:'NOT_FOUND',message:'Pending resource swap not found.'}});
+  swap.status=input.status;
+  await swap.save();
+  ok(res,swap);
+}));
+app.post('/api/resource-swaps/:id/confirm',asyncRoute(async(req,res)=>{
+  const swap=await ResourceSwap.findOne({_id:req.params.id,$or:[{proposerId:req.user.id},{recipientId:req.user.id}]});
+  if(!swap)return res.status(404).json({error:{code:'NOT_FOUND',message:'Resource swap not found.'}});
+  if(swap.status!=='accepted')return res.status(409).json({error:{code:'INVALID_STATUS',message:'Both parties must accept the exchange before confirming completion.'}});
+  if(!swap.confirmations.some(item=>String(item.userId)===req.user.id))swap.confirmations.push({userId:req.user.id,confirmedAt:new Date()});
+  if(new Set(swap.confirmations.map(item=>String(item.userId))).size===2)swap.status='completed';
+  await swap.save();
+  ok(res,swap);
+}));
+app.post('/api/resource-swaps/:id/cancel',asyncRoute(async(req,res)=>{
+  const swap=await ResourceSwap.findOne({_id:req.params.id,$or:[{proposerId:req.user.id},{recipientId:req.user.id}]});
+  if(!swap)return res.status(404).json({error:{code:'NOT_FOUND',message:'Resource swap not found.'}});
+  if(!['proposed','accepted'].includes(swap.status))return res.status(409).json({error:{code:'INVALID_STATUS',message:'This resource swap cannot be cancelled.'}});
+  swap.status='cancelled';
+  await swap.save();
+  ok(res,swap);
+}));
 const opportunitySchema=z.object({title:text(160).min(1),provider:text(160).min(1),description:text(4000).min(1),roleType:text(80).optional(),requiredSkills:z.array(text(60).min(1)).max(40).default([]),eligibility:z.array(text(300).min(1)).max(30).default([]),remote:z.boolean().optional(),location:text(160).optional(),status:z.enum(['draft','published']).optional()}).strict();
 app.get('/api/opportunities',asyncRoute(async(_req,res)=>ok(res,await Opportunity.find({status:'published'}).sort({createdAt:-1}))));
 app.get('/api/owner/opportunities',requireRole('founder','admin'),asyncRoute(async(req,res)=>ok(res,await Opportunity.find(req.user.role==='admin'?{}:{ownerId:req.user.id}).sort({updatedAt:-1}))));

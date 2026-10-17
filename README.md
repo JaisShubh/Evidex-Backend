@@ -39,7 +39,10 @@ See [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md). `npm test` runs 17 unit/schema/ser
 
 - A public profile directory/search is not exposed. A user can create an expiring share link with selected fields, projects and evidence; the raw link token is shown once and revocation is server-enforced.
 - Verification checks every task-required deliverable for a non-empty submitted value and clearly reports its limits. No sandbox execution, source URL accessibility, Git metadata integration, similarity service, or authorship determination is implemented.
-- Reviewer/admin/mentor accounts cannot be created through public signup. Provision them with the documented local role command; reviewer invitations and consent-based talent-board access are not implemented.
-- No file uploads, resume parsing, voice input, location discovery, team builder, scoped business briefs, resource swaps, invitations, payments, or proctoring.
+- Reviewer/admin/mentor accounts cannot be created through public signup. Provision them with the documented local role command. Reviewer invitations and a consent-based talent board remain unimplemented.
+- Scoped business briefs, private invite-only brief tasks, candidate invitation/acceptance, and two-party resource swaps are implemented as API workflows. AI-drafted briefs require an admin approval before publication; AI brief drafting itself is not yet wired to a provider.
+- No file uploads, resume parsing, voice input, location discovery, automated team formation, payments, or proctoring.
+- There is no sandbox execution, source URL accessibility check, Git metadata integration, similarity service, or authorship determination. Completeness checks do not verify correctness.
+- Live Gemini calls and browser end-to-end checks have not been verified. Hosting and deployment configuration still need a target environment and production secrets.
 - Match score weights default to 50% skills, 30% skill-linked evidence, and 20% human rubric performance; configure them in `.env`, and treat them as unvalidated prototype assumptions. Unknown eligibility rules require manual review.
 - Gemini output is a suggestion. User observations are separate; sample output is never labelled live.

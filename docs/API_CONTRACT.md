@@ -38,6 +38,17 @@ All endpoints are prefixed `/api`; protected routes require a bearer JWT. Succes
 | GET | `/ideas/:id/experiments` | Owner | List saved experiments and statuses |
 | GET | `/ideas/:id/results` | Owner | Reload user-recorded experiment results |
 | POST | `/experiments/:id/results` | Owner | Record actual observations and optional outcome; linked evidence must belong to the user |
+| GET/POST/PATCH/DELETE | `/briefs`, `/briefs/:id` | Founder/admin | Manage private business briefs; AI-sourced drafts require admin approval before publication |
+| GET | `/briefs` | User | List published brief summaries |
+| POST | `/briefs/:id/publish` | Founder/admin | Publish a brief as a private invite-only task |
+| POST | `/briefs/:id/approve` | Admin | Approve an AI-sourced brief before publication |
+| POST | `/briefs/:id/invitations` | Brief owner/admin | Invite an active candidate account to a published private brief |
+| GET | `/invitations/me` | User | View invitations addressed to the current user |
+| POST | `/invitations/:id/respond` | Invitee | Accept or decline; acceptance records consent and grants access to the private task |
+| GET | `/briefs/:id/submissions` | Brief owner/admin | Review submissions to a private brief task |
+| GET/POST | `/resource-swaps/me`, `/resource-swaps` | Participants/user | Propose non-monetary swaps and list own swaps |
+| GET | `/resource-swaps/:id` | Participant | Read a swap visible only to its two parties |
+| POST | `/resource-swaps/:id/respond`, `/confirm`, `/cancel` | Participant | Accept/decline, confirm both-party completion, or cancel an open swap |
 | GET | `/opportunities` | User | Published opportunities |
 | GET/POST | `/owner/opportunities` and `/opportunities` | Founder/admin | List owned opportunities or create a draft |
 | PATCH/DELETE | `/opportunities/:id` | Owner/admin | Edit a draft or close an opportunity; admins may publish |
@@ -57,5 +68,7 @@ Starting an attempt stores a snapshot of its task instructions, deliverables, re
 Profile sharing is explicit and link-based. Shares expire in 1-30 days (7 by default), store only a SHA-256 token hash, and can be revoked by the owner. The public response never includes account email and returns only the selected fields and records. A general public directory is not implemented.
 
 Idea analyses save model, schema and prompt versions. If Gemini is missing or fails, the endpoint saves and labels the sample response rather than claiming a live result. Repeated analyses retain history and reuse an existing experiment with the same hypothesis. User research evidence and actual experiment results remain separate from AI suggestions.
+
+Business briefs can be converted to private invite-only tasks. Only active account holders can be invited; candidates must accept before reading the brief or task, and acceptance records consent. AI-sourced briefs require admin approval, but AI brief generation is not yet implemented. Resource swaps are bilateral records with participant-only access and require both participants to confirm completion. The API records agreement and confirmations; it does not enforce delivery, assess disputes, or process payment.
 
 Project and user-reported evidence `DELETE` operations archive records with a timestamp; they do not permanently erase their history. Archived records disappear from normal lists, dashboard counts, matching, and new shares. Editing user-reported evidence resets its provenance/status to `user_reported`/`submitted`. Evidence tied to a task submission cannot be edited or archived.
