@@ -12,6 +12,8 @@ test('user and profile schemas require safe account fields and default private v
   const user = new User({ name: 'Demo', email: 'demo@example.test', passwordHash: 'hash', role: 'student' });
   await user.validate();
   assert.equal(user.profile.visibility, 'private');
+  assert.equal(user.status, 'active');
+  assert.equal(user.tokenVersion, 0);
   await assert.rejects(new User({ name: 'Demo', email: 'demo@example.test', passwordHash: 'hash', role: 'hacker' }).validate());
 });
 

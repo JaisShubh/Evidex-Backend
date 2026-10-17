@@ -21,13 +21,13 @@ const limited = (_req, res) => res.status(429).json({ error: { code: 'RATE_LIMIT
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: 'draft-8', legacyHeaders: false, handler: limited });
 const aiLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false, handler: limited });
 const ok = (res, data, status=200) => res.status(status).json({ data });
-const cleanUser = (u) => ({ id: u._id, name: u.name, email: u.email, role: u.role, profile: u.profile });
+const cleanUser = (u) => ({ id: u._id, name: u.name, email: u.email, role: u.role, status: u.status, profile: u.profile });
 const asyncRoute = (fn) => (req,res,next) => Promise.resolve(fn(req,res,next)).catch(next);
 const text = (max) => z.string().trim().max(max);
 const registerSchema = z.object({ name: text(80).min(1), email: z.string().email().max(254), password: z.string().min(10).max(100), role: z.enum(['student','founder']).optional() });
 app.get('/api/health', asyncRoute(async (_req,res) => { const database=(await import('mongoose')).default.connection.readyState===1?'connected':'disconnected';const status=database==='connected'?'ok':'degraded';return res.status(status==='ok'?200:503).json({data:{status,database}}); }));
-app.post('/api/auth/register', authLimiter, asyncRoute(async (req,res) => { const input=registerSchema.parse(req.body); const email=input.email.toLowerCase(); if(await User.exists({email})) return res.status(409).json({error:{code:'EMAIL_EXISTS',message:'An account with this email already exists.'}}); const user=await User.create({name:input.name,email,passwordHash:await bcrypt.hash(input.password,12),role:input.role||'student',profile:{displayName:input.name}}); const token=jwt.sign({id:user.id,role:user.role},process.env.JWT_SECRET,{expiresIn:'7d'}); return ok(res,{user:cleanUser(user),token},201); }));
-app.post('/api/auth/login', authLimiter, asyncRoute(async (req,res) => { const email=z.string().email().parse(req.body?.email).toLowerCase(); const password=z.string().min(1).max(100).parse(req.body?.password); const user=await User.findOne({email}); if(!user||!(await bcrypt.compare(password,user.passwordHash))) return res.status(401).json({error:{code:'INVALID_CREDENTIALS',message:'Email or password is incorrect.'}}); return ok(res,{user:cleanUser(user),token:jwt.sign({id:user.id,role:user.role},process.env.JWT_SECRET,{expiresIn:'7d'})}); }));
+app.post('/api/auth/register', authLimiter, asyncRoute(async (req,res) => { const input=registerSchema.parse(req.body); const email=input.email.toLowerCase(); if(await User.exists({email})) return res.status(409).json({error:{code:'EMAIL_EXISTS',message:'An account with this email already exists.'}}); const user=await User.create({name:input.name,email,passwordHash:await bcrypt.hash(input.password,12),role:input.role||'student',profile:{displayName:input.name}}); const token=jwt.sign({id:user.id,role:user.role,tokenVersion:user.tokenVersion},process.env.JWT_SECRET,{expiresIn:'7d'}); return ok(res,{user:cleanUser(user),token},201); }));
+app.post('/api/auth/login', authLimiter, asyncRoute(async (req,res) => { const email=z.string().email().parse(req.body?.email).toLowerCase(); const password=z.string().min(1).max(100).parse(req.body?.password); const user=await User.findOne({email}); if(!user||user.status!=='active'||!(await bcrypt.compare(password,user.passwordHash))) return res.status(401).json({error:{code:'INVALID_CREDENTIALS',message:'Email or password is incorrect.'}}); return ok(res,{user:cleanUser(user),token:jwt.sign({id:user.id,role:user.role,tokenVersion:user.tokenVersion},process.env.JWT_SECRET,{expiresIn:'7d'})}); }));
 app.use('/api', requireAuth);
 app.get('/api/dashboard',asyncRoute(async(req,res)=>{
   const userId=req.user.id;
@@ -59,6 +59,29 @@ app.get('/api/dashboard',asyncRoute(async(req,res)=>{
 }));
 app.get('/api/profile/me',asyncRoute(async(req,res)=>{const u=await User.findById(req.user.id); if(!u)return res.status(404).json({error:{code:'NOT_FOUND',message:'User not found.'}}); ok(res,cleanUser(u));}));
 app.patch('/api/profile/me',asyncRoute(async(req,res)=>{const schema=z.object({bio:text(800).optional(),interests:z.array(text(60)).max(20).optional(),preferredRole:text(100).optional(),location:text(100).optional(),visibility:z.enum(['private','public']).optional(),skills:z.array(z.object({name:text(60).min(1),proficiency:z.enum(['beginner','intermediate','advanced']).default('beginner'),evidenceIds:z.array(z.string().regex(/^[a-f\d]{24}$/i)).max(100).optional()})).max(40).optional()}).strict(); const fields=schema.parse(req.body);const linkedIds=[...new Set((fields.skills||[]).flatMap(skill=>skill.evidenceIds||[]))];if(linkedIds.length&&await Evidence.countDocuments({_id:{$in:linkedIds},userId:req.user.id})!==linkedIds.length)return res.status(404).json({error:{code:'NOT_FOUND',message:'One or more evidence records were not found.'}}); const u=await User.findByIdAndUpdate(req.user.id,{$set:Object.fromEntries(Object.entries(fields).map(([k,v])=>[`profile.${k}`,v]))},{new:true,runValidators:true}); ok(res,cleanUser(u));}));
+app.patch('/api/admin/users/:id/access',requireRole('admin'),asyncRoute(async(req,res)=>{
+  const input=z.object({role:z.enum(['student','founder','reviewer','mentor','admin']).optional(),status:z.enum(['active','suspended']).optional()}).strict().refine(value=>Object.keys(value).length>0);
+  const fields=input.parse(req.body);
+  if(req.params.id===req.user.id)return res.status(403).json({error:{code:'FORBIDDEN',message:'Admins cannot change their own account access.'}});
+  const target=await User.findById(req.params.id);
+  if(!target)return res.status(404).json({error:{code:'NOT_FOUND',message:'User not found.'}});
+  const role=fields.role||target.role;
+  const status=fields.status||target.status;
+  if(role===target.role&&status===target.status)return ok(res,cleanUser(target));
+  if(target.role==='admin'&&target.status==='active'&&(role!=='admin'||status!=='active')&&await User.countDocuments({role:'admin',status:'active'})<=1)return res.status(409).json({error:{code:'LAST_ACTIVE_ADMIN',message:'At least one active admin account must remain.'}});
+  target.accessHistory.push({changedBy:req.user.id,source:'admin_api',previousRole:target.role,role,previousStatus:target.status,status});
+  if(target.accessHistory.length>50)target.accessHistory=target.accessHistory.slice(-50);
+  target.role=role;
+  target.status=status;
+  target.tokenVersion+=1;
+  await target.save();
+  ok(res,cleanUser(target));
+}));
+app.get('/api/admin/users/:id/access-history',requireRole('admin'),asyncRoute(async(req,res)=>{
+  const target=await User.findById(req.params.id).select('accessHistory');
+  if(!target)return res.status(404).json({error:{code:'NOT_FOUND',message:'User not found.'}});
+  ok(res,target.accessHistory);
+}));
 app.get('/api/projects/me',asyncRoute(async(req,res)=>ok(res,await Project.find({userId:req.user.id}).sort({updatedAt:-1}))));
 app.post('/api/projects',asyncRoute(async(req,res)=>{const s=z.object({title:text(120).min(1),description:text(1500).optional(),contribution:text(800).optional(),repositoryUrl:z.string().url().optional().or(z.literal('')),demoUrl:z.string().url().optional().or(z.literal('')),skills:z.array(text(60)).max(30).optional()});const p=await Project.create({...s.parse(req.body),userId:req.user.id});ok(res,p,201);}));
 app.post('/api/evidence',asyncRoute(async(req,res)=>{const s=z.object({title:text(160).min(1),type:z.enum(['project','task_submission','certificate','experiment','other']).optional(),sourceUrl:z.string().url().optional().or(z.literal('')),skills:z.array(text(60)).max(30).optional()});const e=await Evidence.create({...s.parse(req.body),userId:req.user.id});ok(res,e,201);}));

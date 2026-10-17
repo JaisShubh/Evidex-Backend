@@ -27,6 +27,10 @@ API: `http://localhost:4000`; UI: `http://localhost:5173`. `CLIENT_ORIGIN` and `
 
 See [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md) for the routes and response shape. Protected routes require `Authorization: Bearer <token>`. Success responses use `{data}`; errors use `{error:{code,message}}`.
 
+## Privileged accounts
+
+Public registration only allows `student` and `founder` roles. To provision a reviewer, mentor, or initial admin, first register the account, then run `npm run provision-role -- <email> <role>` from Backend with `.env` configured. This CLI requires direct database access and does not create accounts or passwords. An admin can later change another account's role or suspend it through `PATCH /api/admin/users/:id/access`; access changes are recorded, invalidate the account's existing bearer tokens, and require the user to sign in again. Admins cannot change their own access through that API.
+
 ## Verification
 
 See [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md). `npm test` runs the 15 unit/schema tests; `npm run test:integration` runs a MongoDB-backed API journey when `MONGODB_URI` and `JWT_SECRET` are configured in `.env`. The integration test uses a fresh random `evidex_it_*` database and drops it after the run. The persisted API journey and Atlas connection passed. Live Gemini requests and browser E2E checks remain unverified; they need provider credentials and a running UI/API environment.
@@ -35,7 +39,7 @@ See [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md). `npm test` runs the 15 unit/schema
 
 - Public profile sharing is not exposed; profiles remain accessible only to their owner and authorized reviewers. The visibility field is stored but no public profile endpoint exists.
 - Verification checks every task-required deliverable for a non-empty submitted value and clearly reports its limits. No sandbox execution, source URL accessibility, Git metadata integration, similarity service, or authorship determination is implemented.
-- Reviewer accounts are not created via public signup; provision one explicitly for reviewer workflow testing.
+- Reviewer/admin/mentor accounts cannot be created through public signup. Provision them with the documented local role command; reviewer invitations and consent-based talent-board access are not implemented.
 - No file uploads, resume parsing, voice input, location discovery, team builder, scoped business briefs, resource swaps, invitations, payments, or proctoring.
 - Match score weights default to 50% skills, 30% skill-linked evidence, and 20% human rubric performance; configure them in `.env`, and treat them as unvalidated prototype assumptions. Unknown eligibility rules require manual review.
 - Gemini output is a suggestion. User observations are separate; sample output is never labelled live.

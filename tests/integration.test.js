@@ -58,22 +58,45 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
         body: { name: label, email, password: 'Integration-Test-Password-42' },
       });
       assert.equal(result.status, 201, JSON.stringify(result.payload));
-      return { token: result.payload.data.token, user: result.payload.data.user };
+      return { token: result.payload.data.token, user: result.payload.data.user, email };
     };
 
     const student = await register('Integration Student');
     const reviewerUser = await register('Integration Reviewer');
     const appealReviewerUser = await register('Appeal Reviewer');
+    const adminUser = await register('Integration Admin');
+    const roleTarget = await register('Role Target');
     await User.updateOne({ _id: reviewerUser.user.id }, { $set: { role: 'reviewer' } });
     await User.updateOne({ _id: appealReviewerUser.user.id }, { $set: { role: 'reviewer' } });
+    await User.updateOne({ _id: adminUser.user.id }, { $set: { role: 'admin' } });
     const reviewerToken = jwt.sign({ id: reviewerUser.user.id, role: 'reviewer' }, process.env.JWT_SECRET, { expiresIn: '5m' });
     const appealReviewerToken = jwt.sign({ id: appealReviewerUser.user.id, role: 'reviewer' }, process.env.JWT_SECRET, { expiresIn: '5m' });
+    const adminToken = jwt.sign({ id: adminUser.user.id, role: 'admin' }, process.env.JWT_SECRET, { expiresIn: '5m' });
 
     assert.equal((await call('GET', '/api/profile/me')).status, 401);
     assert.equal((await call('GET', '/api/profile/me', { token: 'invalid.token.value' })).payload.error.code, 'INVALID_TOKEN');
     assert.equal((await call('GET', '/api/profile/me', { token: student.token })).status, 200);
     assert.equal((await call('POST', '/api/auth/register', { body: { name: '', email: 'bad', password: 'short' } })).status, 400);
+    assert.equal((await call('POST', '/api/auth/register', {
+      body: { name: 'Public Admin Attempt', email: 'public-admin-attempt@example.com', password: 'Integration-Test-Password-42', role: 'admin' },
+    })).status, 400);
     assert.equal((await call('GET', '/api/reviews/queue', { token: student.token })).status, 403);
+    assert.equal((await call('PATCH', `/api/admin/users/${roleTarget.user.id}/access`, { token: student.token, body: { role: 'reviewer' } })).status, 403);
+    const accessChange = await call('PATCH', `/api/admin/users/${roleTarget.user.id}/access`, { token: adminToken, body: { role: 'reviewer' } });
+    assert.equal(accessChange.status, 200, JSON.stringify(accessChange.payload));
+    assert.equal(accessChange.payload.data.role, 'reviewer');
+    assert.equal((await call('GET', '/api/reviews/queue', { token: roleTarget.token })).payload.error.code, 'INVALID_TOKEN');
+    const roleTargetLogin = await call('POST', '/api/auth/login', { body: { email: roleTarget.email, password: 'Integration-Test-Password-42' } });
+    assert.equal(roleTargetLogin.status, 200, JSON.stringify(roleTargetLogin.payload));
+    assert.equal((await call('GET', '/api/reviews/queue', { token: roleTargetLogin.payload.data.token })).status, 200);
+    const accessHistory = await call('GET', `/api/admin/users/${roleTarget.user.id}/access-history`, { token: adminToken });
+    assert.equal(accessHistory.status, 200);
+    assert.equal(accessHistory.payload.data[0].source, 'admin_api');
+    assert.equal((await call('PATCH', `/api/admin/users/${adminUser.user.id}/access`, { token: adminToken, body: { role: 'student' } })).status, 403);
+    const suspension = await call('PATCH', `/api/admin/users/${roleTarget.user.id}/access`, { token: adminToken, body: { status: 'suspended' } });
+    assert.equal(suspension.status, 200);
+    assert.equal((await call('GET', '/api/reviews/queue', { token: roleTargetLogin.payload.data.token })).payload.error.code, 'INVALID_TOKEN');
+    assert.equal((await call('POST', '/api/auth/login', { body: { email: roleTarget.email, password: 'Integration-Test-Password-42' } })).payload.error.code, 'INVALID_CREDENTIALS');
 
     const project = await call('POST', '/api/projects', {
       token: student.token,
@@ -115,7 +138,7 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     assert.equal(verification.payload.data.submission.status, 'checks_passed');
     assert.deepEqual(verification.payload.data.checks.map(({ name, status }) => ({ name, status })), [{ name: 'Completeness: Summary', status: 'passed' }]);
     assert.match(verification.payload.data.warnings[0], /correctness.*not checked/);
-    assert.equal((await call('GET', `/api/submissions/${submissionId}/verification`, { token: reviewerUser.token })).status, 404);
+    assert.equal((await call('GET', `/api/submissions/${submissionId}/verification`, { token: reviewerUser.token })).status, 200);
     assert.equal((await call('GET', `/api/submissions/${submissionId}/verification`, { token: reviewerToken })).status, 200);
 
     const review = await call('POST', `/api/submissions/${submissionId}/reviews`, {
