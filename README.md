@@ -17,7 +17,7 @@ API: `http://localhost:4000`; UI: `http://localhost:5173`. `CLIENT_ORIGIN` and `
 - Account registration and sign-in with bcrypt password hashing and signed bearer tokens.
 - Owned, private-by-default profile, editable/archiveable projects and evidence records, and explicitly scoped, expiring and revocable profile-share links.
 - Admin-managed draft/published/archived tasks with immutable attempt snapshots, required deliverables, versioned submissions/history, persisted completeness-check runs, linked evidence, rubric-bound reviewer decisions, and independent appeals that can reopen a rejected submission for resubmission.
-- Idea Lab with Gemini structured JSON output, Zod validation, saved analysis metadata, rate limiting, explicitly labelled sample output, experiment plans, and separately stored actual results with optional founder-entered outcome.
+- Idea Lab with Gemini structured JSON output, Zod validation, versioned analysis metadata, labelled sample fallback on missing keys or provider errors, evidence-linked research records, deduplicated experiment plans, and separately stored actual results with optional founder-entered outcome.
 - Deterministic skill, linked-evidence, and reviewer-rubric matching with configurable/versioned weights, an explanation, and explicit eligible / not eligible / needs review states.
 - Published opportunity browsing and persisted applications.
 - Authenticated dashboard summary derived from the user's saved evidence, verified tasks, review states, recent activity, ideas, planned experiments and latest saved match.
@@ -33,7 +33,7 @@ Public registration only allows `student` and `founder` roles. To provision a re
 
 ## Verification
 
-See [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md). `npm test` runs the 15 unit/schema tests; `npm run test:integration` runs a MongoDB-backed API journey when `MONGODB_URI` and `JWT_SECRET` are configured in `.env`. The integration test uses a fresh random `evidex_it_*` database and drops it after the run. The persisted API journey and Atlas connection passed. Live Gemini requests and browser E2E checks remain unverified; they need provider credentials and a running UI/API environment.
+See [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md). `npm test` runs 17 unit/schema/service tests; `npm run test:integration` runs a MongoDB-backed API journey when `MONGODB_URI` and `JWT_SECRET` are configured in `.env`. The integration test uses a fresh random `evidex_it_*` database and drops it after the run. The persisted API journey and Atlas connection passed. Live Gemini requests and browser E2E checks remain unverified; they need provider credentials and a running UI/API environment.
 
 ## Limitations and planned scope
 

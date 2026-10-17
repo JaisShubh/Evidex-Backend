@@ -8,7 +8,7 @@ import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { User } from './models/User.js';
 import { Project, Evidence, Task, Attempt, Submission, VerificationRun, Review, Appeal } from './models/Work.js';
-import { Idea, IdeaAnalysis, Experiment, ExperimentResult, Opportunity, MatchResult, Application } from './models/Venture.js';
+import { Idea, IdeaAnalysis, IdeaResearch, Experiment, ExperimentResult, Opportunity, MatchResult, Application } from './models/Venture.js';
 import { ProfileShare } from './models/Sharing.js';
 import { requireAuth, requireRole } from './middleware/auth.js';
 import { deconstructIdea } from './services/gemini.service.js';
@@ -259,9 +259,40 @@ app.post('/api/appeals/:id/resolve',requireRole('reviewer','admin'),asyncRoute(a
   }
   ok(res,{appeal,submission:sub});
 }));
+const ideaSchema=z.object({title:text(120).min(1),description:text(5000).min(1),targetCustomer:text(500).optional(),problem:text(1000).optional(),proposedSolution:text(1000).optional(),alternatives:text(1000).optional()}).strict();
 app.get('/api/ideas',asyncRoute(async(req,res)=>ok(res,await Idea.find({userId:req.user.id}).sort({updatedAt:-1}))));
-app.post('/api/ideas',asyncRoute(async(req,res)=>{const idea=await Idea.create({...z.object({title:text(120).min(1),description:text(5000).min(1),targetCustomer:text(500).optional(),problem:text(1000).optional(),proposedSolution:text(1000).optional(),alternatives:text(1000).optional()}).parse(req.body),userId:req.user.id});ok(res,idea,201);}));
-app.post('/api/venture/deconstruct',aiLimiter,asyncRoute(async(req,res)=>{const idea=await Idea.findOne({_id:z.string().regex(/^[a-f\d]{24}$/i).parse(req.body?.ideaId),userId:req.user.id});if(!idea)return res.status(404).json({error:{code:'NOT_FOUND',message:'Idea not found.'}});let generated;try{generated=await deconstructIdea(idea);}catch(err){console.error('Gemini request failed',err?.message);return res.status(503).json({error:{code:'AI_UNAVAILABLE',message:'Idea analysis is temporarily unavailable. Your saved idea is safe; please retry or continue manually.'}});}const saved=await IdeaAnalysis.create({ideaId:idea.id,userId:req.user.id,model:generated.model,source:generated.source,...generated.data});const experiments=await Experiment.insertMany(generated.data.experiments.map(e=>({...e,ideaId:idea.id,userId:req.user.id,status:'planned'})));idea.status='test_planned';await idea.save();ok(res,{analysis:saved,experiments,notice:generated.source==='sample'?'Sample response — not generated live. Configure GEMINI_API_KEY for live analysis.':'AI-generated suggestions, not verified facts or market research.'},201);}));
+app.post('/api/ideas',asyncRoute(async(req,res)=>{const idea=await Idea.create({...ideaSchema.parse(req.body),userId:req.user.id});ok(res,idea,201);}));
+app.get('/api/ideas/:id',asyncRoute(async(req,res)=>{const idea=await Idea.findOne({_id:req.params.id,userId:req.user.id});return idea?ok(res,idea):res.status(404).json({error:{code:'NOT_FOUND',message:'Idea not found.'}});}));
+app.patch('/api/ideas/:id',asyncRoute(async(req,res)=>{const fields=ideaSchema.partial().refine(value=>Object.keys(value).length>0).parse(req.body);const idea=await Idea.findOne({_id:req.params.id,userId:req.user.id});if(!idea)return res.status(404).json({error:{code:'NOT_FOUND',message:'Idea not found.'}});Object.assign(idea,fields);await idea.save();ok(res,idea);}));
+app.post('/api/ideas/:id/research',asyncRoute(async(req,res)=>{
+  const idea=await Idea.findOne({_id:req.params.id,userId:req.user.id});
+  if(!idea)return res.status(404).json({error:{code:'NOT_FOUND',message:'Idea not found.'}});
+  const input=z.object({evidenceIds:z.array(z.string().regex(/^[a-f\d]{24}$/i)).min(1).max(20),notes:text(2000).optional()}).strict().parse(req.body);
+  const evidenceIds=[...new Set(input.evidenceIds)];
+  if(evidenceIds.length!==input.evidenceIds.length)return res.status(400).json({error:{code:'VALIDATION_ERROR',message:'Evidence records cannot be repeated.'}});
+  if(await Evidence.countDocuments({_id:{$in:evidenceIds},userId:req.user.id,archivedAt:null,provenance:{$ne:'sample'}})!==evidenceIds.length)return res.status(404).json({error:{code:'NOT_FOUND',message:'One or more evidence records were not found.'}});
+  const research=await IdeaResearch.create({ideaId:idea.id,userId:req.user.id,evidenceIds,notes:input.notes||''});
+  if(idea.status==='guess')idea.status='researched';
+  await idea.save();
+  ok(res,{research,ideaStatus:idea.status},201);
+}));
+app.get('/api/ideas/:id/research',asyncRoute(async(req,res)=>{const idea=await Idea.exists({_id:req.params.id,userId:req.user.id});if(!idea)return res.status(404).json({error:{code:'NOT_FOUND',message:'Idea not found.'}});ok(res,await IdeaResearch.find({ideaId:req.params.id,userId:req.user.id}).sort({createdAt:-1}).populate('evidenceIds','title type sourceUrl provenance status'));}));
+app.post('/api/venture/deconstruct',aiLimiter,asyncRoute(async(req,res)=>{
+  const idea=await Idea.findOne({_id:z.string().regex(/^[a-f\d]{24}$/i).parse(req.body?.ideaId),userId:req.user.id});
+  if(!idea)return res.status(404).json({error:{code:'NOT_FOUND',message:'Idea not found.'}});
+  const generated=await deconstructIdea(idea);
+  const saved=await IdeaAnalysis.create({ideaId:idea.id,userId:req.user.id,model:generated.model,source:generated.source,promptVersion:generated.promptVersion||'1',...generated.data});
+  const experiments=[];
+  for(const item of generated.data.experiments){
+    let experiment=await Experiment.findOne({userId:req.user.id,ideaId:idea.id,hypothesis:item.hypothesis});
+    if(!experiment)experiment=await Experiment.create({...item,ideaId:idea.id,userId:req.user.id,status:'planned'});
+    experiments.push(experiment);
+  }
+  if(['guess','researched'].includes(idea.status))idea.status='test_planned';
+  await idea.save();
+  const notice=generated.source==='sample'?(generated.fallbackReason?'Gemini was unavailable. Sample response — not generated live. Your saved idea is safe; retry later or continue manually.':'Sample response — not generated live. Configure GEMINI_API_KEY for live analysis.'):'AI-generated suggestions, not verified facts or market research.';
+  ok(res,{analysis:saved,experiments,notice},201);
+}));
 app.get('/api/ideas/:id/analyses',asyncRoute(async(req,res)=>{const idea=await Idea.exists({_id:req.params.id,userId:req.user.id});if(!idea)return res.status(404).json({error:{code:'NOT_FOUND',message:'Idea not found.'}});ok(res,await IdeaAnalysis.find({ideaId:req.params.id,userId:req.user.id}).sort({createdAt:-1}));}));
 app.get('/api/ideas/:id/results',asyncRoute(async(req,res)=>{const idea=await Idea.exists({_id:req.params.id,userId:req.user.id});if(!idea)return res.status(404).json({error:{code:'NOT_FOUND',message:'Idea not found.'}});const experiments=await Experiment.find({ideaId:req.params.id,userId:req.user.id}).select('_id');ok(res,await ExperimentResult.find({experimentId:{$in:experiments.map(e=>e._id)},userId:req.user.id}).sort({createdAt:-1}));}));
 app.get('/api/ideas/:id/experiments',asyncRoute(async(req,res)=>{const idea=await Idea.exists({_id:req.params.id,userId:req.user.id});if(!idea)return res.status(404).json({error:{code:'NOT_FOUND',message:'Idea not found.'}});ok(res,await Experiment.find({ideaId:req.params.id,userId:req.user.id}).sort({createdAt:-1}));}));

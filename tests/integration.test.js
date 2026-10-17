@@ -266,12 +266,27 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
       body: { title: 'Integration idea', description: 'A temporary idea used only for API testing.' },
     });
     assert.equal(idea.status, 201, JSON.stringify(idea.payload));
+    const ideaUpdate = await call('PATCH', `/api/ideas/${idea.payload.data._id}`, { token: student.token, body: { targetCustomer: 'Test participants' } });
+    assert.equal(ideaUpdate.status, 200);
+    assert.equal((await call('GET', `/api/ideas/${idea.payload.data._id}`, { token: student.token })).payload.data.targetCustomer, 'Test participants');
+    assert.equal((await call('POST', `/api/ideas/${idea.payload.data._id}/research`, { token: reviewerUser.token, body: { evidenceIds: [evidence.payload.data._id] } })).status, 404);
+    const research = await call('POST', `/api/ideas/${idea.payload.data._id}/research`, {
+      token: student.token, body: { evidenceIds: [evidence.payload.data._id], notes: 'User-recorded test research reference.' },
+    });
+    assert.equal(research.status, 201, JSON.stringify(research.payload));
+    assert.equal(research.payload.data.ideaStatus, 'researched');
+    assert.equal((await call('GET', `/api/ideas/${idea.payload.data._id}/research`, { token: student.token })).payload.data.length, 1);
     process.env.GEMINI_API_KEY = '';
     const analysis = await call('POST', '/api/venture/deconstruct', {
       token: student.token, body: { ideaId: idea.payload.data._id },
     });
     assert.equal(analysis.status, 201, JSON.stringify(analysis.payload));
     assert.match(analysis.payload.data.notice, /Sample response/);
+    assert.equal(analysis.payload.data.analysis.promptVersion, '1');
+    const repeatedAnalysis = await call('POST', '/api/venture/deconstruct', { token: student.token, body: { ideaId: idea.payload.data._id } });
+    assert.equal(repeatedAnalysis.status, 201);
+    assert.equal((await call('GET', `/api/ideas/${idea.payload.data._id}/experiments`, { token: student.token })).payload.data.length, 1);
+    assert.equal((await call('GET', `/api/ideas/${idea.payload.data._id}/analyses`, { token: student.token })).payload.data.length, 2);
     const experimentId = analysis.payload.data.experiments[0]._id;
     const result = await call('POST', `/api/experiments/${experimentId}/results`, {
       token: student.token,

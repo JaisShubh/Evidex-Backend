@@ -31,6 +31,8 @@ All endpoints are prefixed `/api`; protected routes require a bearer JWT. Succes
 | GET | `/appeals/queue` | Reviewer/admin | List pending appeals |
 | POST | `/appeals/:id/resolve` | Independent reviewer/admin | Uphold or overturn an appeal; an overturned rejection returns to Changes Requested |
 | GET/POST | `/ideas` | User | List/create own ideas |
+| GET/PATCH | `/ideas/:id` | Owner | Read/update own idea fields |
+| GET/POST | `/ideas/:id/research` | Owner | Link owned evidence sources and record research notes |
 | POST | `/venture/deconstruct` | Owner | Analyze saved idea (sample fallback labelled) |
 | GET | `/ideas/:id/analyses` | Owner | List analysis history |
 | GET | `/ideas/:id/experiments` | Owner | List saved experiments and statuses |
@@ -48,5 +50,7 @@ Task and evidence status meanings are explicit enum values in schemas. Match wei
 Starting an attempt stores a snapshot of its task instructions, deliverables, required skills and rubric. Later admin edits increment the task version and affect new attempts only; submissions, verification and reviews for existing attempts continue to use their snapshot.
 
 Profile sharing is explicit and link-based. Shares expire in 1-30 days (7 by default), store only a SHA-256 token hash, and can be revoked by the owner. The public response never includes account email and returns only the selected fields and records. A general public directory is not implemented.
+
+Idea analyses save model, schema and prompt versions. If Gemini is missing or fails, the endpoint saves and labels the sample response rather than claiming a live result. Repeated analyses retain history and reuse an existing experiment with the same hypothesis. User research evidence and actual experiment results remain separate from AI suggestions.
 
 Project and user-reported evidence `DELETE` operations archive records with a timestamp; they do not permanently erase their history. Archived records disappear from normal lists, dashboard counts, matching, and new shares. Editing user-reported evidence resets its provenance/status to `user_reported`/`submitted`. Evidence tied to a task submission cannot be edited or archived.
