@@ -2,7 +2,7 @@
 
 ## Automated checks run
 
-- `npm test` — 14 dashboard/matching/model tests passed: persisted-summary derivation, activity ordering, scoring, configurable weights, unknown eligibility handling, excluded evidence statuses, and Mongoose ownership/status schemas.
+- `npm test` — 15 dashboard/matching/model tests passed: persisted-summary derivation, activity ordering, allowed resubmission states, scoring, configurable weights, unknown eligibility handling, excluded evidence statuses, and Mongoose ownership/status schemas.
 - `npm run build` in Frontend — production build passed.
 - `node --check` across backend JavaScript modules and a dynamic import of the Express app — passed.
 - MongoDB Atlas connection and `ping` using the configured Backend environment — passed.

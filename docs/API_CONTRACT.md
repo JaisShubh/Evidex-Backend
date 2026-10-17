@@ -12,7 +12,7 @@ All endpoints are prefixed `/api`; protected routes require a bearer JWT. Succes
 | GET/POST | `/evidence/me`, `/evidence` | Owner | List/create own evidence records |
 | GET | `/tasks`, `/tasks/:id` | User | List/read published tasks |
 | POST | `/tasks/:id/attempts` | User | Start versioned attempt |
-| POST | `/attempts/:id/submissions` | Owner | Create versioned submission with required deliverables |
+| POST | `/attempts/:id/submissions` | Owner | Create first submission or versioned resubmission after changes are requested |
 | GET | `/submissions/me`, `/attempts/:id/submissions` | Owner | Reload submission and attempt history |
 | GET | `/submissions/:id/verification` | Owner/reviewer | Read persisted verification and review history |
 | POST | `/submissions/:id/verify` | Owner | Save a completeness check |

@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import { User } from '../src/models/User.js';
 import { Task, Attempt, Submission, Evidence, VerificationRun } from '../src/models/Work.js';
 import { Idea, ExperimentResult, Application } from '../src/models/Venture.js';
+import { canSubmitAttempt } from '../src/services/submission.service.js';
 
 const id = () => new mongoose.Types.ObjectId();
 
@@ -45,5 +46,14 @@ test('verification runs persist the check result and its limitations', async () 
 test('applications prevent duplicate user-opportunity pairs with a unique compound index', () => {
   const index = Application.schema.indexes().find(([keys, options]) => keys.userId === 1 && keys.opportunityId === 1 && options.unique);
   assert.ok(index);
+});
+
+test('submissions are allowed once per attempt and again only after changes are requested', () => {
+  assert.equal(canSubmitAttempt('in_progress'), true);
+  assert.equal(canSubmitAttempt('changes_requested'), true);
+  assert.equal(canSubmitAttempt('submitted'), false);
+  assert.equal(canSubmitAttempt('checks_passed'), false);
+  assert.equal(canSubmitAttempt('verified'), false);
+  assert.equal(canSubmitAttempt('rejected'), false);
 });
 
