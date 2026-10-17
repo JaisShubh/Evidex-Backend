@@ -3,6 +3,7 @@
 ## Automated checks run
 
 - `npm test` — 17 unit/schema/service tests passed; the MongoDB integration test is skipped by default unless enabled.
+- `npm audit` — 0 vulnerabilities after removing the dev-only `nodemon` dependency chain and using Node 20's built-in `--watch` mode.
 - `npm run test:integration` with `EVIDEX_INTEGRATION_TESTS=true` and configured `MONGODB_URI`/`JWT_SECRET` — passed against Atlas. It creates a uniquely named temporary database, runs the API journey, then drops that database. Coverage includes registration, missing/invalid/revoked tokens, public role escalation rejection, admin role/suspension changes and access history, role and owner checks, profile/project/evidence create/update/archive persistence and scoped/expiring/revocable sharing, explicit talent-board consent/search/revocation, admin task creation/publication/versioning/archiving with attempt snapshots, submission/completeness verification/reviewer decision/independent appeal and resubmission, Idea Lab idea edit, evidence-linked research, labelled fallback analysis, deduplicated experiments and saved results, private business brief approval/publication, opt-in invitations and private task access, two-party resource swap lifecycle, founder/admin opportunity publishing, matching, application status history, withdrawal and duplicate rejection, and dashboard counts.
 - `npm run build` in Frontend — production build passed.
 - `node --check` across backend JavaScript modules and a dynamic import of the Express app — passed.
@@ -15,7 +16,7 @@
 
 - Browser-based database flows remain unverified.
 - Live Gemini request and browser-based end-to-end checks remain unverified. Configure a key and run both services on a machine that permits local networking.
-- `npm audit` could not reach the npm audit endpoint because network name resolution is unavailable. `npm install` reported 3 high-severity findings in Backend and 2 moderate in Frontend; resolve/review them with an online `npm audit` before deployment.
+- Frontend dependency audit status is tracked separately in the Frontend repository; this backend audit does not cover frontend dependencies.
 
 ## Manual acceptance flow after setup
 
