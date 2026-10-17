@@ -328,6 +328,13 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     assert.equal(result.status, 201, JSON.stringify(result.payload));
     assert.equal((await call('GET', `/api/ideas/${idea.payload.data._id}/results`, { token: student.token })).payload.data.length, 1);
 
+    const generatedBrief = await call('POST', '/api/briefs/generate-draft', { token: founder.token, body: { title: 'Generated test brief', context: 'Create a short research task using synthetic information.' } });
+    assert.equal(generatedBrief.status, 201, JSON.stringify(generatedBrief.payload));
+    assert.equal(generatedBrief.payload.data.brief.status, 'draft');
+    assert.equal(generatedBrief.payload.data.brief.draftOrigin, 'sample');
+    assert.equal(generatedBrief.payload.data.generation.source, 'sample');
+    assert.equal((await call('POST', `/api/briefs/${generatedBrief.payload.data.brief._id}/publish`, { token: founder.token })).payload.error.code, 'APPROVAL_REQUIRED');
+
     const briefCreated = await call('POST', '/api/briefs', {
       token: founder.token,
       body: { title: 'Integration business brief', problem: 'A scoped test problem.', desiredOutcome: 'A concise research plan.', constraints: 'Use synthetic data only.', effortEstimate: 'Two hours', requiredSkills: ['Research'], deliverables: [{ name: 'Plan', required: true, instructions: 'Describe a safe validation plan.' }], rubric: [{ criterion: 'Clarity', points: 10, description: 'The plan is clear.' }], source: 'ai' },

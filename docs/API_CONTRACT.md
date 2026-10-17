@@ -43,6 +43,7 @@ All endpoints are prefixed `/api`; protected routes require a bearer JWT. Succes
 | POST | `/experiments/:id/results` | Owner | Record actual observations and optional outcome; linked evidence must belong to the user |
 | GET/POST/PATCH/DELETE | `/briefs`, `/briefs/:id` | Founder/admin | Manage private business briefs; AI-sourced drafts require admin approval before publication |
 | GET | `/briefs` | User | List published brief summaries |
+| POST | `/briefs/generate-draft` | Founder/admin | Generate a structured Gemini-assisted draft (10 requests/hour); sample fallback is labelled and remains a draft |
 | POST | `/briefs/:id/publish` | Founder/admin | Publish a brief as a private invite-only task |
 | POST | `/briefs/:id/approve` | Admin | Approve an AI-sourced brief before publication |
 | POST | `/briefs/:id/invitations` | Brief owner/admin | Invite an active candidate account to a published private brief |
@@ -74,7 +75,7 @@ The talent board is separate from profile `visibility`. A student must call `POS
 
 Idea analyses save model, schema and prompt versions. If Gemini is missing or fails, the endpoint saves and labels the sample response rather than claiming a live result. Repeated analyses retain history and reuse an existing experiment with the same hypothesis. User research evidence and actual experiment results remain separate from AI suggestions.
 
-Business briefs can be converted to private invite-only tasks. Only active account holders can be invited; candidates must accept before reading the brief or task, and acceptance records consent. AI-sourced briefs require admin approval, but AI brief generation is not yet implemented. Resource swaps are bilateral records with participant-only access and require both participants to confirm completion. The API records agreement and confirmations; it does not enforce delivery, assess disputes, or process payment.
+Business briefs can be generated with Gemini or returned as clearly labelled sample drafts, then edited before publication. Generated briefs remain private drafts and require admin approval before publishing. Briefs can be converted to private invite-only tasks. Only active account holders can be invited; candidates must accept before reading the brief or task, and acceptance records consent. Resource swaps are bilateral records with participant-only access and require both participants to confirm completion. The API records agreement and confirmations; it does not enforce delivery, assess disputes, or process payment.
 
 Project and user-reported evidence `DELETE` operations archive records with a timestamp; they do not permanently erase their history. Archived records disappear from normal lists, dashboard counts, matching, and new shares. Editing user-reported evidence resets its provenance/status to `user_reported`/`submitted`. Evidence tied to a task submission cannot be edited or archived.
 

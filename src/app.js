@@ -13,7 +13,7 @@ import { ProfileShare } from './models/Sharing.js';
 import { Brief, Invitation, ResourceSwap } from './models/Collaboration.js';
 import { RepositoryCheck } from './models/RepositoryCheck.js';
 import { requireAuth, requireRole } from './middleware/auth.js';
-import { deconstructIdea } from './services/gemini.service.js';
+import { deconstructIdea, draftBusinessBrief } from './services/gemini.service.js';
 import { calculateMatch } from './services/matching.service.js';
 import { buildDashboardSummary } from './services/dashboard.service.js';
 import { canSubmitAttempt } from './services/submission.service.js';
@@ -328,6 +328,12 @@ app.get('/api/ideas/:id/results',asyncRoute(async(req,res)=>{const idea=await Id
 app.get('/api/ideas/:id/experiments',asyncRoute(async(req,res)=>{const idea=await Idea.exists({_id:req.params.id,userId:req.user.id});if(!idea)return res.status(404).json({error:{code:'NOT_FOUND',message:'Idea not found.'}});ok(res,await Experiment.find({ideaId:req.params.id,userId:req.user.id}).sort({createdAt:-1}));}));
 app.post('/api/experiments/:id/results',asyncRoute(async(req,res)=>{const exp=await Experiment.findOne({_id:req.params.id,userId:req.user.id});if(!exp)return res.status(404).json({error:{code:'NOT_FOUND',message:'Experiment not found.'}});const input=z.object({observations:text(4000).min(1),metricValue:text(300).optional(),outcome:z.enum(['supported','contradicted','inconclusive']).optional(),evidenceIds:z.array(z.string().regex(/^[a-f\d]{24}$/i)).max(20).optional(),limitations:text(1000).optional()}).parse(req.body);if(input.evidenceIds?.length){const count=await Evidence.countDocuments({_id:{$in:input.evidenceIds},userId:req.user.id,archivedAt:null});if(count!==new Set(input.evidenceIds).size)return res.status(404).json({error:{code:'NOT_FOUND',message:'One or more evidence records were not found.'}});}const result=await ExperimentResult.create({...input,experimentId:exp.id,userId:req.user.id});exp.status='recorded';await exp.save();await Idea.findOneAndUpdate({_id:exp.ideaId,userId:req.user.id},{status:input.outcome||'test_recorded'});ok(res,result,201);}));
 const briefSchema=z.object({title:text(160).min(1),problem:text(4000).min(1),desiredOutcome:text(2000).min(1),constraints:text(2000).optional(),effortEstimate:text(200).optional(),requiredSkills:z.array(text(60).min(1)).max(30).default([]),deliverables:z.array(z.object({name:text(120).min(1),required:z.boolean().default(true),instructions:text(1000).optional()}).strict()).min(1).max(20),rubric:z.array(z.object({criterion:text(120).min(1),points:z.number().positive(),description:text(1000).min(1)}).strict()).min(1).max(20),allowedTools:text(500).optional(),source:z.enum(['owner','ai']).optional()}).strict();
+app.post('/api/briefs/generate-draft',requireRole('founder','admin'),aiLimiter,asyncRoute(async(req,res)=>{
+  const input=z.object({title:text(160).min(1),context:text(4000).min(1),desiredOutcome:text(2000).optional(),constraints:text(2000).optional()}).strict().parse(req.body);
+  const generated=await draftBusinessBrief(input);
+  const brief=await Brief.create({ownerId:req.user.id,title:input.title,...generated.data,status:'draft',source:'ai',draftOrigin:generated.source,promptVersion:generated.promptVersion,version:1});
+  ok(res,{brief,generation:{source:generated.source,model:generated.model,promptVersion:generated.promptVersion,fallbackReason:generated.fallbackReason||null,notice:generated.source==='sample'?'Sample draft template — not generated live. Review and edit it before submitting for admin approval.':'AI-generated draft proposal — review and edit it before submitting for admin approval.'}},201);
+}));
 app.get('/api/briefs',asyncRoute(async(_req,res)=>ok(res,await Brief.find({status:'published'}).select('title desiredOutcome effortEstimate requiredSkills version createdAt').sort({createdAt:-1}))));
 app.get('/api/briefs/me',requireRole('founder','admin'),asyncRoute(async(req,res)=>ok(res,await Brief.find(req.user.role==='admin'?{}:{ownerId:req.user.id}).sort({updatedAt:-1}))));
 app.post('/api/briefs',requireRole('founder','admin'),asyncRoute(async(req,res)=>{const input=briefSchema.parse(req.body);ok(res,await Brief.create({...input,ownerId:req.user.id,status:'draft',version:1,source:input.source||'owner'}),201);}));

@@ -16,6 +16,8 @@ const briefSchema = new Schema({
   version: { type: Number, default: 1 },
   status: { type: String, enum: ['draft','published','archived'], default: 'draft' },
   source: { type: String, enum: ['owner','ai'], default: 'owner' },
+  draftOrigin: { type: String, enum: ['manual','gemini','sample'], default: 'manual' },
+  promptVersion: { type: String, default: null },
   approvedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   approvedAt: Date,
   taskId: { type: Schema.Types.ObjectId, ref: 'Task' },

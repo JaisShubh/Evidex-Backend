@@ -2,14 +2,14 @@
 
 ## Automated checks run
 
-- `npm test` — 21 unit/schema/service tests passed; the MongoDB integration test is skipped by default unless enabled.
+- `npm test` — 23 unit/schema/service tests passed; the MongoDB integration test is skipped by default unless enabled.
 - GitHub metadata service tests — URL allowlisting/canonicalization, restricted metadata fields, missing/private response handling, and bounded provider errors passed with mocked fetch responses.
 - `npm audit` — 0 vulnerabilities after removing the dev-only `nodemon` dependency chain and using Node 20's built-in `--watch` mode.
 - `npm run test:integration` with `EVIDEX_INTEGRATION_TESTS=true` and configured `MONGODB_URI`/`JWT_SECRET` — passed against Atlas. It creates a uniquely named temporary database, runs the API journey, then drops that database. Coverage includes registration, missing/invalid/revoked tokens, public role escalation rejection, admin role/suspension changes and access history, role and owner checks, profile/project/evidence create/update/archive persistence and scoped/expiring/revocable sharing, explicit talent-board consent/search/revocation, owner-scoped public GitHub metadata checks with mocked provider response, admin task creation/publication/versioning/archiving with attempt snapshots, submission/completeness verification/reviewer decision/independent appeal and resubmission, Idea Lab idea edit, evidence-linked research, labelled fallback analysis, deduplicated experiments and saved results, private business brief approval/publication, opt-in invitations and private task access, two-party resource swap lifecycle, founder/admin opportunity publishing, matching, application status history, withdrawal and duplicate rejection, and dashboard counts.
 - `npm run build` in Frontend — production build passed.
 - `node --check` across backend JavaScript modules and a dynamic import of the Express app — passed.
 - MongoDB Atlas connection and `ping` using the configured Backend environment — passed.
-- Gemini unit checks — missing-key and simulated provider-error cases both return labelled sample data without leaking provider diagnostics.
+- Gemini unit checks — missing-key and simulated provider-error cases for Idea Lab and brief generation return labelled sample data without leaking provider diagnostics; structured brief output validation also passes.
 - API app route modules imported cleanly.
 - Server module syntax check passed after adding `SIGINT`/`SIGTERM` graceful HTTP and MongoDB shutdown handling.
 
