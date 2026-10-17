@@ -80,6 +80,20 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     assert.equal((await call('GET', '/api/profile/me')).status, 401);
     assert.equal((await call('GET', '/api/profile/me', { token: 'invalid.token.value' })).payload.error.code, 'INVALID_TOKEN');
     assert.equal((await call('GET', '/api/profile/me', { token: student.token })).status, 200);
+    assert.equal((await call('GET', '/api/talent-board/candidates', { token: student.token })).status, 403);
+    await call('PATCH', '/api/profile/me', { token: student.token, body: { visibility: 'public', location: 'Delhi', preferredRole: 'Research Intern', skills: [{ name: 'Research', proficiency: 'intermediate' }] } });
+    assert.equal((await call('GET', '/api/talent-board/candidates?skill=Research', { token: reviewerToken })).payload.data.length, 0);
+    assert.equal((await call('POST', '/api/talent-board/consent', { token: reviewerToken })).status, 403);
+    const consent = await call('POST', '/api/talent-board/consent', { token: student.token });
+    assert.equal(consent.status, 200);
+    assert.equal(consent.payload.data.enabled, true);
+    const board = await call('GET', '/api/talent-board/candidates?skill=Research&location=delhi', { token: reviewerToken });
+    assert.equal(board.status, 200);
+    assert.equal(board.payload.data.length, 1);
+    assert.equal(board.payload.data[0].id, student.user.id);
+    assert.equal('email' in board.payload.data[0], false);
+    assert.equal((await call('DELETE', '/api/talent-board/consent', { token: student.token })).payload.data.enabled, false);
+    assert.equal((await call('GET', '/api/talent-board/candidates?skill=Research', { token: reviewerToken })).payload.data.length, 0);
     assert.equal((await call('POST', '/api/auth/register', { body: { name: '', email: 'bad', password: 'short' } })).status, 400);
     assert.equal((await call('POST', '/api/auth/register', {
       body: { name: 'Public Admin Attempt', email: 'public-admin-attempt@example.com', password: 'Integration-Test-Password-42', role: 'admin' },

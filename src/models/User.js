@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 const profileSchema = new mongoose.Schema({
   displayName: { type: String, trim: true, maxlength: 80 }, bio: { type: String, trim: true, maxlength: 800, default: '' },
   interests: [{ type: String, trim: true, maxlength: 60 }], preferredRole: { type: String, trim: true, maxlength: 100, default: '' },
-  location: { type: String, trim: true, maxlength: 100, default: '' }, visibility: { type: String, enum: ['private','public'], default: 'private' },
+  location: { type: String, trim: true, maxlength: 100, default: '' }, visibility: { type: String, enum: ['private','public'], default: 'private' }, talentBoardConsentAt: { type: Date, default: null },
   skills: [{ name: { type: String, trim: true }, proficiency: { type: String, enum: ['beginner','intermediate','advanced'], default: 'beginner' }, evidenceIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Evidence' }] }]
 }, { timestamps: true });
 const accessChangeSchema = new mongoose.Schema({

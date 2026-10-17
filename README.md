@@ -39,7 +39,7 @@ See [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md). `npm test` runs 17 unit/schema/ser
 
 - A public profile directory/search is not exposed. A user can create an expiring share link with selected fields, projects and evidence; the raw link token is shown once and revocation is server-enforced.
 - Verification checks every task-required deliverable for a non-empty submitted value and clearly reports its limits. No sandbox execution, source URL accessibility, Git metadata integration, similarity service, or authorship determination is implemented.
-- Reviewer/admin/mentor accounts cannot be created through public signup. Provision them with the documented local role command. Reviewer invitations and a consent-based talent board remain unimplemented.
+- Reviewer/admin/mentor accounts cannot be created through public signup. Provision them with the documented local role command. The restricted talent board only shows active student accounts that explicitly opted in; reviewer invitations remain unimplemented.
 - Scoped business briefs, private invite-only brief tasks, candidate invitation/acceptance, and two-party resource swaps are implemented as API workflows. AI-drafted briefs require an admin approval before publication; AI brief drafting itself is not yet wired to a provider.
 - No file uploads, resume parsing, voice input, location discovery, automated team formation, payments, or proctoring.
 - There is no sandbox execution, source URL accessibility check, Git metadata integration, similarity service, or authorship determination. Completeness checks do not verify correctness.

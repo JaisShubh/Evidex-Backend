@@ -98,6 +98,19 @@ app.get('/api/dashboard',asyncRoute(async(req,res)=>{
 }));
 app.get('/api/profile/me',asyncRoute(async(req,res)=>{const u=await User.findById(req.user.id); if(!u)return res.status(404).json({error:{code:'NOT_FOUND',message:'User not found.'}}); ok(res,cleanUser(u));}));
 app.patch('/api/profile/me',asyncRoute(async(req,res)=>{const schema=z.object({bio:text(800).optional(),interests:z.array(text(60)).max(20).optional(),preferredRole:text(100).optional(),location:text(100).optional(),visibility:z.enum(['private','public']).optional(),skills:z.array(z.object({name:text(60).min(1),proficiency:z.enum(['beginner','intermediate','advanced']).default('beginner'),evidenceIds:z.array(z.string().regex(/^[a-f\d]{24}$/i)).max(100).optional()})).max(40).optional()}).strict(); const fields=schema.parse(req.body);const linkedIds=[...new Set((fields.skills||[]).flatMap(skill=>skill.evidenceIds||[]))];if(linkedIds.length&&await Evidence.countDocuments({_id:{$in:linkedIds},userId:req.user.id,archivedAt:null})!==linkedIds.length)return res.status(404).json({error:{code:'NOT_FOUND',message:'One or more evidence records were not found.'}}); const u=await User.findByIdAndUpdate(req.user.id,{$set:Object.fromEntries(Object.entries(fields).map(([k,v])=>[`profile.${k}`,v]))},{new:true,runValidators:true}); ok(res,cleanUser(u));}));
+app.post('/api/talent-board/consent',requireRole('student'),asyncRoute(async(req,res)=>{const user=await User.findByIdAndUpdate(req.user.id,{$set:{'profile.talentBoardConsentAt':new Date()}},{new:true});ok(res,{enabled:true,consentedAt:user.profile.talentBoardConsentAt});}));
+app.delete('/api/talent-board/consent',requireRole('student'),asyncRoute(async(req,res)=>{await User.findByIdAndUpdate(req.user.id,{$set:{'profile.talentBoardConsentAt':null}});ok(res,{enabled:false});}));
+app.get('/api/talent-board/candidates',requireRole('reviewer','mentor','admin'),asyncRoute(async(req,res)=>{
+  const querySchema=z.object({skill:text(60).optional(),location:text(100).optional(),preferredRole:text(100).optional(),limit:z.coerce.number().int().min(1).max(50).default(25)}).strict();
+  const query=querySchema.parse(req.query);
+  const escaped=(value)=>value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const filter={role:'student',status:'active','profile.talentBoardConsentAt':{$type:'date'}};
+  if(query.skill)filter['profile.skills.name']={$regex:`^${escaped(query.skill)}$`,$options:'i'};
+  if(query.location)filter['profile.location']={$regex:escaped(query.location),$options:'i'};
+  if(query.preferredRole)filter['profile.preferredRole']={$regex:escaped(query.preferredRole),$options:'i'};
+  const candidates=await User.find(filter).select('name profile.displayName profile.bio profile.preferredRole profile.location profile.skills profile.talentBoardConsentAt').sort({'profile.talentBoardConsentAt':-1}).limit(query.limit).lean();
+  ok(res,candidates.map(candidate=>({id:candidate._id,name:candidate.profile?.displayName||candidate.name,bio:candidate.profile?.bio||'',preferredRole:candidate.profile?.preferredRole||'',location:candidate.profile?.location||'',skills:(candidate.profile?.skills||[]).map(({name,proficiency})=>({name,proficiency})),consentedAt:candidate.profile?.talentBoardConsentAt})));
+}));
 app.patch('/api/admin/users/:id/access',requireRole('admin'),asyncRoute(async(req,res)=>{
   const input=z.object({role:z.enum(['student','founder','reviewer','mentor','admin']).optional(),status:z.enum(['active','suspended']).optional()}).strict().refine(value=>Object.keys(value).length>0);
   const fields=input.parse(req.body);

@@ -7,6 +7,8 @@ All endpoints are prefixed `/api`; protected routes require a bearer JWT. Succes
 | GET | `/health` | Public | API and database status |
 | POST | `/auth/register`, `/auth/login` | Public | Account creation/sign-in |
 | GET/PATCH | `/profile/me` | User | Read/update own profile |
+| POST/DELETE | `/talent-board/consent` | Student | Explicitly opt in to, or revoke, discoverability |
+| GET | `/talent-board/candidates` | Reviewer/mentor/admin | Search consenting active student profiles by skill, location, or preferred role; response omits email and evidence records |
 | POST | `/profile/shares` | Owner | Create an expiring share scoped to selected profile fields/projects/evidence; returns a one-time share token |
 | GET | `/profile/shares/me` | Owner | List own shares without token hashes |
 | DELETE | `/profile/shares/:id` | Owner | Revoke an active share |
@@ -66,6 +68,8 @@ Task and evidence status meanings are explicit enum values in schemas. Match wei
 Starting an attempt stores a snapshot of its task instructions, deliverables, required skills and rubric. Later admin edits increment the task version and affect new attempts only; submissions, verification and reviews for existing attempts continue to use their snapshot.
 
 Profile sharing is explicit and link-based. Shares expire in 1-30 days (7 by default), store only a SHA-256 token hash, and can be revoked by the owner. The public response never includes account email and returns only the selected fields and records. A general public directory is not implemented.
+
+The talent board is separate from profile `visibility`. A student must call `POST /talent-board/consent` before becoming searchable, and can immediately revoke consent with `DELETE`. Only reviewers, mentors, and admins may search. Results include a candidate ID, display name, bio, preferred role, location, skills/proficiency, and consent timestamp; they omit email and linked evidence. Suspended users and non-student accounts are excluded.
 
 Idea analyses save model, schema and prompt versions. If Gemini is missing or fails, the endpoint saves and labels the sample response rather than claiming a live result. Repeated analyses retain history and reuse an existing experiment with the same hypothesis. User research evidence and actual experiment results remain separate from AI suggestions.
 
