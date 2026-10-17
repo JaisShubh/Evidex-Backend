@@ -7,11 +7,15 @@ All endpoints are prefixed `/api`; protected routes require a bearer JWT. Succes
 | GET | `/health` | Public | API and database status |
 | POST | `/auth/register`, `/auth/login` | Public | Account creation/sign-in |
 | GET/PATCH | `/profile/me` | User | Read/update own profile |
+| POST | `/profile/shares` | Owner | Create an expiring share scoped to selected profile fields/projects/evidence; returns a one-time share token |
+| GET | `/profile/shares/me` | Owner | List own shares without token hashes |
+| DELETE | `/profile/shares/:id` | Owner | Revoke an active share |
+| GET | `/shared/profile` | Share token | Read only the profile fields/projects/evidence granted by `X-Profile-Share` |
 | PATCH | `/admin/users/:id/access` | Admin | Change another account's role/status; records the change and invalidates existing tokens |
 | GET | `/admin/users/:id/access-history` | Admin | Read account role/status change history |
 | GET | `/dashboard` | User | Actual evidence, task, review, activity, idea and latest-match summary |
-| GET/POST | `/projects/me`, `/projects` | Owner | List/create own projects |
-| GET/POST | `/evidence/me`, `/evidence` | Owner | List/create own evidence records |
+| GET/POST/PATCH/DELETE | `/projects/me`, `/projects`, `/projects/:id` | Owner | List/create/update/archive own projects |
+| GET/POST/PATCH/DELETE | `/evidence/me`, `/evidence`, `/evidence/:id` | Owner | List/create/update/archive own evidence; task-submission evidence is system-managed |
 | GET | `/tasks`, `/tasks/:id` | User | List/read published tasks |
 | POST | `/tasks/:id/attempts` | User | Start versioned attempt |
 | POST | `/attempts/:id/submissions` | Owner | Create first submission or versioned resubmission after changes are requested |
@@ -39,3 +43,7 @@ All endpoints are prefixed `/api`; protected routes require a bearer JWT. Succes
 Task and evidence status meanings are explicit enum values in schemas. Match weights default to 50% skills, 30% title-linked relevant evidence, and 20% human rubric performance. Configure `MATCH_SKILL_WEIGHT`, `MATCH_EVIDENCE_WEIGHT`, and `MATCH_TASK_WEIGHT`; they must sum to 100. `MATCH_FORMULA_VERSION` is saved with each result. Unsupported mandatory eligibility rules are marked `needs_review`, never silently treated as passing.
 
 `POST /submissions/:id/verify` checks that each task-required deliverable has a non-empty submitted value. `checks_passed` means this completeness check passed; it does not mean task correctness, source accessibility, authorship, or originality was verified. The response includes warnings naming those unsupported checks.
+
+Profile sharing is explicit and link-based. Shares expire in 1-30 days (7 by default), store only a SHA-256 token hash, and can be revoked by the owner. The public response never includes account email and returns only the selected fields and records. A general public directory is not implemented.
+
+Project and user-reported evidence `DELETE` operations archive records with a timestamp; they do not permanently erase their history. Archived records disappear from normal lists, dashboard counts, matching, and new shares. Editing user-reported evidence resets its provenance/status to `user_reported`/`submitted`. Evidence tied to a task submission cannot be edited or archived.

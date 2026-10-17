@@ -15,7 +15,7 @@ API: `http://localhost:4000`; UI: `http://localhost:5173`. `CLIENT_ORIGIN` and `
 ## Core features implemented
 
 - Account registration and sign-in with bcrypt password hashing and signed bearer tokens.
-- Owned, private-by-default profile, projects, and evidence records.
+- Owned, private-by-default profile, editable/archiveable projects and evidence records, and explicitly scoped, expiring and revocable profile-share links.
 - Published tasks, attempts bound to task version, required deliverables, versioned submissions/history, persisted completeness-check runs, linked evidence, rubric-bound reviewer decisions, and independent appeals that can reopen a rejected submission for resubmission.
 - Idea Lab with Gemini structured JSON output, Zod validation, saved analysis metadata, rate limiting, explicitly labelled sample output, experiment plans, and separately stored actual results with optional founder-entered outcome.
 - Deterministic skill, linked-evidence, and reviewer-rubric matching with configurable/versioned weights, an explanation, and explicit eligible / not eligible / needs review states.
@@ -37,7 +37,7 @@ See [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md). `npm test` runs the 15 unit/schema
 
 ## Limitations and planned scope
 
-- Public profile sharing is not exposed; profiles remain accessible only to their owner and authorized reviewers. The visibility field is stored but no public profile endpoint exists.
+- A public profile directory/search is not exposed. A user can create an expiring share link with selected fields, projects and evidence; the raw link token is shown once and revocation is server-enforced.
 - Verification checks every task-required deliverable for a non-empty submitted value and clearly reports its limits. No sandbox execution, source URL accessibility, Git metadata integration, similarity service, or authorship determination is implemented.
 - Reviewer/admin/mentor accounts cannot be created through public signup. Provision them with the documented local role command; reviewer invitations and consent-based talent-board access are not implemented.
 - No file uploads, resume parsing, voice input, location discovery, team builder, scoped business briefs, resource swaps, invitations, payments, or proctoring.

@@ -2,12 +2,14 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import { createHash, randomBytes } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { User } from './models/User.js';
 import { Project, Evidence, Task, Attempt, Submission, VerificationRun, Review, Appeal } from './models/Work.js';
 import { Idea, IdeaAnalysis, Experiment, ExperimentResult, Opportunity, MatchResult, Application } from './models/Venture.js';
+import { ProfileShare } from './models/Sharing.js';
 import { requireAuth, requireRole } from './middleware/auth.js';
 import { deconstructIdea } from './services/gemini.service.js';
 import { calculateMatch } from './services/matching.service.js';
@@ -28,11 +30,46 @@ const registerSchema = z.object({ name: text(80).min(1), email: z.string().email
 app.get('/api/health', asyncRoute(async (_req,res) => { const database=(await import('mongoose')).default.connection.readyState===1?'connected':'disconnected';const status=database==='connected'?'ok':'degraded';return res.status(status==='ok'?200:503).json({data:{status,database}}); }));
 app.post('/api/auth/register', authLimiter, asyncRoute(async (req,res) => { const input=registerSchema.parse(req.body); const email=input.email.toLowerCase(); if(await User.exists({email})) return res.status(409).json({error:{code:'EMAIL_EXISTS',message:'An account with this email already exists.'}}); const user=await User.create({name:input.name,email,passwordHash:await bcrypt.hash(input.password,12),role:input.role||'student',profile:{displayName:input.name}}); const token=jwt.sign({id:user.id,role:user.role,tokenVersion:user.tokenVersion},process.env.JWT_SECRET,{expiresIn:'7d'}); return ok(res,{user:cleanUser(user),token},201); }));
 app.post('/api/auth/login', authLimiter, asyncRoute(async (req,res) => { const email=z.string().email().parse(req.body?.email).toLowerCase(); const password=z.string().min(1).max(100).parse(req.body?.password); const user=await User.findOne({email}); if(!user||user.status!=='active'||!(await bcrypt.compare(password,user.passwordHash))) return res.status(401).json({error:{code:'INVALID_CREDENTIALS',message:'Email or password is incorrect.'}}); return ok(res,{user:cleanUser(user),token:jwt.sign({id:user.id,role:user.role,tokenVersion:user.tokenVersion},process.env.JWT_SECRET,{expiresIn:'7d'})}); }));
+app.get('/api/shared/profile',asyncRoute(async(req,res)=>{
+  const token=req.get('x-profile-share');
+  if(!token||!/^[-_A-Za-z0-9]{40,60}$/.test(token))return res.status(404).json({error:{code:'SHARE_NOT_FOUND',message:'This profile share is unavailable.'}});
+  const tokenHash=createHash('sha256').update(token).digest('hex');
+  const share=await ProfileShare.findOne({tokenHash,revokedAt:null,expiresAt:{$gt:new Date()}});
+  if(!share)return res.status(404).json({error:{code:'SHARE_NOT_FOUND',message:'This profile share is unavailable.'}});
+  const [owner,projects,evidence]=await Promise.all([
+    User.findOne({_id:share.ownerId,status:'active'}).select('profile'),
+    Project.find({_id:{$in:share.projectIds},userId:share.ownerId,archivedAt:null}).select('title description contribution repositoryUrl demoUrl skills'),
+    Evidence.find({_id:{$in:share.evidenceIds},userId:share.ownerId,provenance:{$ne:'sample'},archivedAt:null}).select('type title sourceUrl skills provenance status createdAt'),
+  ]);
+  if(!owner)return res.status(404).json({error:{code:'SHARE_NOT_FOUND',message:'This profile share is unavailable.'}});
+  const profile={};
+  for(const field of share.profileFields)if(field==='skills')profile.skills=(owner.profile.skills||[]).map(skill=>({name:skill.name,proficiency:skill.proficiency,evidenceIds:(skill.evidenceIds||[]).filter(id=>share.evidenceIds.some(sharedId=>String(sharedId)===String(id)))}));else profile[field]=owner.profile[field];
+  ok(res,{profile,projects,evidence,expiresAt:share.expiresAt});
+}));
 app.use('/api', requireAuth);
+app.post('/api/profile/shares',asyncRoute(async(req,res)=>{
+  const schema=z.object({profileFields:z.array(z.enum(['displayName','bio','interests','preferredRole','location','skills'])).max(6).default([]),projectIds:z.array(z.string().regex(/^[a-f\d]{24}$/i)).max(20).default([]),evidenceIds:z.array(z.string().regex(/^[a-f\d]{24}$/i)).max(20).default([]),expiresInDays:z.number().int().min(1).max(30).default(7)}).strict().refine(input=>input.profileFields.length+input.projectIds.length+input.evidenceIds.length>0);
+  const input=schema.parse(req.body);
+  if(new Set(input.profileFields).size!==input.profileFields.length||new Set(input.projectIds).size!==input.projectIds.length||new Set(input.evidenceIds).size!==input.evidenceIds.length)return res.status(400).json({error:{code:'VALIDATION_ERROR',message:'Share scopes cannot contain duplicates.'}});
+  if(input.projectIds.length&&await Project.countDocuments({_id:{$in:input.projectIds},userId:req.user.id,archivedAt:null})!==input.projectIds.length)return res.status(404).json({error:{code:'NOT_FOUND',message:'One or more projects were not found.'}});
+  if(input.evidenceIds.length&&await Evidence.countDocuments({_id:{$in:input.evidenceIds},userId:req.user.id,provenance:{$ne:'sample'},archivedAt:null})!==input.evidenceIds.length)return res.status(404).json({error:{code:'NOT_FOUND',message:'One or more evidence records were not found.'}});
+  const shareToken=randomBytes(32).toString('base64url');
+  const expiresAt=new Date(Date.now()+input.expiresInDays*24*60*60*1000);
+  const share=await ProfileShare.create({ownerId:req.user.id,tokenHash:createHash('sha256').update(shareToken).digest('hex'),profileFields:input.profileFields,projectIds:input.projectIds,evidenceIds:input.evidenceIds,expiresAt});
+  ok(res,{id:share.id,shareToken,expiresAt},201);
+}));
+app.get('/api/profile/shares/me',asyncRoute(async(req,res)=>ok(res,await ProfileShare.find({ownerId:req.user.id}).select('-tokenHash').sort({createdAt:-1}))));
+app.delete('/api/profile/shares/:id',asyncRoute(async(req,res)=>{
+  const share=await ProfileShare.findOne({_id:req.params.id,ownerId:req.user.id,revokedAt:null});
+  if(!share)return res.status(404).json({error:{code:'NOT_FOUND',message:'Active profile share not found.'}});
+  share.revokedAt=new Date();
+  await share.save();
+  ok(res,{id:share.id,revokedAt:share.revokedAt});
+}));
 app.get('/api/dashboard',asyncRoute(async(req,res)=>{
   const userId=req.user.id;
   const [evidenceCount,completedTaskCount,pendingReviewCount,changesRequestedCount,activeAttempt,plannedExperiment,latestMatch,ideas,submissions,projects,results,recentEvidence]=await Promise.all([
-    Evidence.countDocuments({userId,provenance:{$ne:'sample'}}),
+    Evidence.countDocuments({userId,provenance:{$ne:'sample'},archivedAt:null}),
     Attempt.countDocuments({userId,isSample:{$ne:true},status:'verified'}),
     Submission.countDocuments({userId,isSample:{$ne:true},status:{$in:['submitted','checks_passed','needs_review']}}),
     Submission.countDocuments({userId,isSample:{$ne:true},status:'changes_requested'}),
@@ -41,9 +78,9 @@ app.get('/api/dashboard',asyncRoute(async(req,res)=>{
     MatchResult.findOne({userId}).sort({calculatedAt:-1}).populate({path:'opportunityId',select:'title provider roleType'}),
     Idea.find({userId}).sort({updatedAt:-1}).limit(3).select('title status updatedAt'),
     Submission.find({userId,isSample:{$ne:true}}).sort({submittedAt:-1}).limit(8).select('_id status submittedAt'),
-    Project.find({userId}).sort({updatedAt:-1}).limit(5).select('_id title updatedAt'),
+    Project.find({userId,archivedAt:null}).sort({updatedAt:-1}).limit(5).select('_id title updatedAt'),
     ExperimentResult.find({userId}).sort({createdAt:-1}).limit(5).select('_id observations createdAt'),
-    Evidence.find({userId,provenance:{$ne:'sample'}}).sort({createdAt:-1}).limit(5).select('_id title status createdAt'),
+    Evidence.find({userId,provenance:{$ne:'sample'},archivedAt:null}).sort({createdAt:-1}).limit(5).select('_id title status createdAt'),
   ]);
   const submissionIds=submissions.map((item)=>item._id);
   const reviews=submissionIds.length?await Review.find({submissionId:{$in:submissionIds}}).sort({createdAt:-1}).limit(8).select('submissionId decision createdAt'):[];
@@ -58,7 +95,7 @@ app.get('/api/dashboard',asyncRoute(async(req,res)=>{
   return ok(res,buildDashboardSummary({evidenceCount,completedTaskCount,pendingReviewCount,changesRequestedCount,activeAttempt:active,plannedExperiment:nextExperiment,latestMatch:opportunityMatchPreview,ideas,recentActivity:[...submissionActivity,...reviewActivity,...projectActivity,...resultActivity,...evidenceActivity]}));
 }));
 app.get('/api/profile/me',asyncRoute(async(req,res)=>{const u=await User.findById(req.user.id); if(!u)return res.status(404).json({error:{code:'NOT_FOUND',message:'User not found.'}}); ok(res,cleanUser(u));}));
-app.patch('/api/profile/me',asyncRoute(async(req,res)=>{const schema=z.object({bio:text(800).optional(),interests:z.array(text(60)).max(20).optional(),preferredRole:text(100).optional(),location:text(100).optional(),visibility:z.enum(['private','public']).optional(),skills:z.array(z.object({name:text(60).min(1),proficiency:z.enum(['beginner','intermediate','advanced']).default('beginner'),evidenceIds:z.array(z.string().regex(/^[a-f\d]{24}$/i)).max(100).optional()})).max(40).optional()}).strict(); const fields=schema.parse(req.body);const linkedIds=[...new Set((fields.skills||[]).flatMap(skill=>skill.evidenceIds||[]))];if(linkedIds.length&&await Evidence.countDocuments({_id:{$in:linkedIds},userId:req.user.id})!==linkedIds.length)return res.status(404).json({error:{code:'NOT_FOUND',message:'One or more evidence records were not found.'}}); const u=await User.findByIdAndUpdate(req.user.id,{$set:Object.fromEntries(Object.entries(fields).map(([k,v])=>[`profile.${k}`,v]))},{new:true,runValidators:true}); ok(res,cleanUser(u));}));
+app.patch('/api/profile/me',asyncRoute(async(req,res)=>{const schema=z.object({bio:text(800).optional(),interests:z.array(text(60)).max(20).optional(),preferredRole:text(100).optional(),location:text(100).optional(),visibility:z.enum(['private','public']).optional(),skills:z.array(z.object({name:text(60).min(1),proficiency:z.enum(['beginner','intermediate','advanced']).default('beginner'),evidenceIds:z.array(z.string().regex(/^[a-f\d]{24}$/i)).max(100).optional()})).max(40).optional()}).strict(); const fields=schema.parse(req.body);const linkedIds=[...new Set((fields.skills||[]).flatMap(skill=>skill.evidenceIds||[]))];if(linkedIds.length&&await Evidence.countDocuments({_id:{$in:linkedIds},userId:req.user.id,archivedAt:null})!==linkedIds.length)return res.status(404).json({error:{code:'NOT_FOUND',message:'One or more evidence records were not found.'}}); const u=await User.findByIdAndUpdate(req.user.id,{$set:Object.fromEntries(Object.entries(fields).map(([k,v])=>[`profile.${k}`,v]))},{new:true,runValidators:true}); ok(res,cleanUser(u));}));
 app.patch('/api/admin/users/:id/access',requireRole('admin'),asyncRoute(async(req,res)=>{
   const input=z.object({role:z.enum(['student','founder','reviewer','mentor','admin']).optional(),status:z.enum(['active','suspended']).optional()}).strict().refine(value=>Object.keys(value).length>0);
   const fields=input.parse(req.body);
@@ -82,10 +119,56 @@ app.get('/api/admin/users/:id/access-history',requireRole('admin'),asyncRoute(as
   if(!target)return res.status(404).json({error:{code:'NOT_FOUND',message:'User not found.'}});
   ok(res,target.accessHistory);
 }));
-app.get('/api/projects/me',asyncRoute(async(req,res)=>ok(res,await Project.find({userId:req.user.id}).sort({updatedAt:-1}))));
-app.post('/api/projects',asyncRoute(async(req,res)=>{const s=z.object({title:text(120).min(1),description:text(1500).optional(),contribution:text(800).optional(),repositoryUrl:z.string().url().optional().or(z.literal('')),demoUrl:z.string().url().optional().or(z.literal('')),skills:z.array(text(60)).max(30).optional()});const p=await Project.create({...s.parse(req.body),userId:req.user.id});ok(res,p,201);}));
-app.post('/api/evidence',asyncRoute(async(req,res)=>{const s=z.object({title:text(160).min(1),type:z.enum(['project','task_submission','certificate','experiment','other']).optional(),sourceUrl:z.string().url().optional().or(z.literal('')),skills:z.array(text(60)).max(30).optional()});const e=await Evidence.create({...s.parse(req.body),userId:req.user.id});ok(res,e,201);}));
-app.get('/api/evidence/me',asyncRoute(async(req,res)=>ok(res,await Evidence.find({userId:req.user.id}).sort({createdAt:-1}))));
+const projectSchema=z.object({title:text(120).min(1),description:text(1500).optional(),contribution:text(800).optional(),repositoryUrl:z.string().url().optional().or(z.literal('')),demoUrl:z.string().url().optional().or(z.literal('')),skills:z.array(text(60)).max(30).optional()}).strict();
+const evidenceSchema=z.object({title:text(160).min(1),type:z.enum(['project','task_submission','certificate','experiment','other']).optional(),sourceUrl:z.string().url().optional().or(z.literal('')),skills:z.array(text(60)).max(30).optional(),relatedProjectId:z.string().regex(/^[a-f\d]{24}$/i).optional()}).strict();
+app.get('/api/projects/me',asyncRoute(async(req,res)=>ok(res,await Project.find({userId:req.user.id,archivedAt:null}).sort({updatedAt:-1}))));
+app.post('/api/projects',asyncRoute(async(req,res)=>{const p=await Project.create({...projectSchema.parse(req.body),userId:req.user.id});ok(res,p,201);}));
+app.patch('/api/projects/:id',asyncRoute(async(req,res)=>{
+  const fields=projectSchema.partial().refine(value=>Object.keys(value).length>0).parse(req.body);
+  const project=await Project.findOne({_id:req.params.id,userId:req.user.id,archivedAt:null});
+  if(!project)return res.status(404).json({error:{code:'NOT_FOUND',message:'Project not found.'}});
+  Object.assign(project,fields);
+  await project.save();
+  ok(res,project);
+}));
+app.delete('/api/projects/:id',asyncRoute(async(req,res)=>{
+  const project=await Project.findOne({_id:req.params.id,userId:req.user.id,archivedAt:null});
+  if(!project)return res.status(404).json({error:{code:'NOT_FOUND',message:'Project not found.'}});
+  project.archivedAt=new Date();
+  await project.save();
+  ok(res,{id:project.id,archivedAt:project.archivedAt});
+}));
+app.post('/api/evidence',asyncRoute(async(req,res)=>{
+  const input=evidenceSchema.parse(req.body);
+  if(input.relatedProjectId&&!await Project.exists({_id:input.relatedProjectId,userId:req.user.id,archivedAt:null}))return res.status(404).json({error:{code:'NOT_FOUND',message:'Project not found.'}});
+  const e=await Evidence.create({...input,userId:req.user.id});
+  ok(res,e,201);
+}));
+app.get('/api/evidence/me',asyncRoute(async(req,res)=>ok(res,await Evidence.find({userId:req.user.id,archivedAt:null}).sort({createdAt:-1}))));
+app.patch('/api/evidence/:id',asyncRoute(async(req,res)=>{
+  const schema=z.object({title:text(160).min(1).optional(),type:z.enum(['project','task_submission','certificate','experiment','other']).optional(),sourceUrl:z.string().url().optional().or(z.literal('')),skills:z.array(text(60)).max(30).optional(),relatedProjectId:z.string().regex(/^[a-f\d]{24}$/i).nullable().optional()}).strict().refine(value=>Object.keys(value).length>0);
+  const fields=schema.parse(req.body);
+  const evidence=await Evidence.findOne({_id:req.params.id,userId:req.user.id,archivedAt:null});
+  if(!evidence)return res.status(404).json({error:{code:'NOT_FOUND',message:'Evidence not found.'}});
+  if(evidence.provenance==='sample'||evidence.relatedSubmissionId)return res.status(409).json({error:{code:'SYSTEM_MANAGED_RECORD',message:'Task-submission and sample evidence cannot be edited.'}});
+  if(fields.relatedProjectId&&!await Project.exists({_id:fields.relatedProjectId,userId:req.user.id,archivedAt:null}))return res.status(404).json({error:{code:'NOT_FOUND',message:'Project not found.'}});
+  Object.assign(evidence,fields,{status:'submitted',provenance:'user_reported'});
+  await evidence.save();
+  ok(res,evidence);
+}));
+app.delete('/api/evidence/:id',asyncRoute(async(req,res)=>{
+  const evidence=await Evidence.findOne({_id:req.params.id,userId:req.user.id,archivedAt:null});
+  if(!evidence)return res.status(404).json({error:{code:'NOT_FOUND',message:'Evidence not found.'}});
+  if(evidence.provenance==='sample'||evidence.relatedSubmissionId)return res.status(409).json({error:{code:'SYSTEM_MANAGED_RECORD',message:'Task-submission and sample evidence cannot be archived.'}});
+  evidence.archivedAt=new Date();
+  await evidence.save();
+  const owner=await User.findById(req.user.id);
+  if(owner){
+    owner.profile.skills=owner.profile.skills.map(skill=>{skill.evidenceIds=(skill.evidenceIds||[]).filter(id=>String(id)!==String(evidence.id));return skill;});
+    await owner.save();
+  }
+  ok(res,{id:evidence.id,archivedAt:evidence.archivedAt});
+}));
 app.get('/api/tasks',asyncRoute(async(_req,res)=>ok(res,await Task.find({status:'published'}).sort({createdAt:-1}))));
 app.get('/api/tasks/:id',asyncRoute(async(req,res)=>{const task=await Task.findOne({_id:req.params.id,status:'published'});return task?ok(res,task):res.status(404).json({error:{code:'NOT_FOUND',message:'Task not found.'}});}));
 app.post('/api/tasks/:id/attempts',asyncRoute(async(req,res)=>{const task=await Task.findOne({_id:req.params.id,status:'published'});if(!task)return res.status(404).json({error:{code:'NOT_FOUND',message:'Task not found.'}});ok(res,await Attempt.create({taskId:task.id,userId:req.user.id,taskVersion:task.version}),201);}));
@@ -156,9 +239,9 @@ app.post('/api/venture/deconstruct',aiLimiter,asyncRoute(async(req,res)=>{const 
 app.get('/api/ideas/:id/analyses',asyncRoute(async(req,res)=>{const idea=await Idea.exists({_id:req.params.id,userId:req.user.id});if(!idea)return res.status(404).json({error:{code:'NOT_FOUND',message:'Idea not found.'}});ok(res,await IdeaAnalysis.find({ideaId:req.params.id,userId:req.user.id}).sort({createdAt:-1}));}));
 app.get('/api/ideas/:id/results',asyncRoute(async(req,res)=>{const idea=await Idea.exists({_id:req.params.id,userId:req.user.id});if(!idea)return res.status(404).json({error:{code:'NOT_FOUND',message:'Idea not found.'}});const experiments=await Experiment.find({ideaId:req.params.id,userId:req.user.id}).select('_id');ok(res,await ExperimentResult.find({experimentId:{$in:experiments.map(e=>e._id)},userId:req.user.id}).sort({createdAt:-1}));}));
 app.get('/api/ideas/:id/experiments',asyncRoute(async(req,res)=>{const idea=await Idea.exists({_id:req.params.id,userId:req.user.id});if(!idea)return res.status(404).json({error:{code:'NOT_FOUND',message:'Idea not found.'}});ok(res,await Experiment.find({ideaId:req.params.id,userId:req.user.id}).sort({createdAt:-1}));}));
-app.post('/api/experiments/:id/results',asyncRoute(async(req,res)=>{const exp=await Experiment.findOne({_id:req.params.id,userId:req.user.id});if(!exp)return res.status(404).json({error:{code:'NOT_FOUND',message:'Experiment not found.'}});const input=z.object({observations:text(4000).min(1),metricValue:text(300).optional(),outcome:z.enum(['supported','contradicted','inconclusive']).optional(),evidenceIds:z.array(z.string().regex(/^[a-f\d]{24}$/i)).max(20).optional(),limitations:text(1000).optional()}).parse(req.body);if(input.evidenceIds?.length){const count=await Evidence.countDocuments({_id:{$in:input.evidenceIds},userId:req.user.id});if(count!==new Set(input.evidenceIds).size)return res.status(404).json({error:{code:'NOT_FOUND',message:'One or more evidence records were not found.'}});}const result=await ExperimentResult.create({...input,experimentId:exp.id,userId:req.user.id});exp.status='recorded';await exp.save();await Idea.findOneAndUpdate({_id:exp.ideaId,userId:req.user.id},{status:input.outcome||'test_recorded'});ok(res,result,201);}));
+app.post('/api/experiments/:id/results',asyncRoute(async(req,res)=>{const exp=await Experiment.findOne({_id:req.params.id,userId:req.user.id});if(!exp)return res.status(404).json({error:{code:'NOT_FOUND',message:'Experiment not found.'}});const input=z.object({observations:text(4000).min(1),metricValue:text(300).optional(),outcome:z.enum(['supported','contradicted','inconclusive']).optional(),evidenceIds:z.array(z.string().regex(/^[a-f\d]{24}$/i)).max(20).optional(),limitations:text(1000).optional()}).parse(req.body);if(input.evidenceIds?.length){const count=await Evidence.countDocuments({_id:{$in:input.evidenceIds},userId:req.user.id,archivedAt:null});if(count!==new Set(input.evidenceIds).size)return res.status(404).json({error:{code:'NOT_FOUND',message:'One or more evidence records were not found.'}});}const result=await ExperimentResult.create({...input,experimentId:exp.id,userId:req.user.id});exp.status='recorded';await exp.save();await Idea.findOneAndUpdate({_id:exp.ideaId,userId:req.user.id},{status:input.outcome||'test_recorded'});ok(res,result,201);}));
 app.get('/api/opportunities',asyncRoute(async(_req,res)=>ok(res,await Opportunity.find({status:'published'}))));
-app.post('/api/match/calculate',asyncRoute(async(req,res)=>{const [user,evidence,opportunity]=await Promise.all([User.findById(req.user.id),Evidence.find({userId:req.user.id}),Opportunity.findOne({_id:req.body?.opportunityId,status:'published'})]);if(!user)return res.status(404).json({error:{code:'NOT_FOUND',message:'User not found.'}});if(!opportunity)return res.status(404).json({error:{code:'NOT_FOUND',message:'Opportunity not found.'}});const submissions=await Submission.find({userId:req.user.id}).select('_id');const reviews=await Review.find({submissionId:{$in:submissions.map(s=>s._id)}}).populate({path:'submissionId',populate:{path:'attemptId',populate:{path:'taskId',select:'requiredSkills'}}});const required=new Set((opportunity.requiredSkills||[]).map(s=>s.trim().toLowerCase()));const relevantReviews=reviews.filter(r=>r.submissionId?.attemptId?.taskId?.requiredSkills?.some(s=>required.has(s.trim().toLowerCase())));const scores=relevantReviews.flatMap(r=>r.rubricScores.map(s=>({score:s.score,max:s.maxScore}))).filter(s=>s.max>0);const taskPerformance=scores.length?scores.reduce((sum,s)=>sum+s.score/s.max,0)/scores.length:0;const result=calculateMatch(user.profile,evidence,opportunity,taskPerformance);const saved=await MatchResult.create({userId:req.user.id,opportunityId:opportunity.id,...result});ok(res,saved,201);}));
+app.post('/api/match/calculate',asyncRoute(async(req,res)=>{const [user,evidence,opportunity]=await Promise.all([User.findById(req.user.id),Evidence.find({userId:req.user.id,archivedAt:null}),Opportunity.findOne({_id:req.body?.opportunityId,status:'published'})]);if(!user)return res.status(404).json({error:{code:'NOT_FOUND',message:'User not found.'}});if(!opportunity)return res.status(404).json({error:{code:'NOT_FOUND',message:'Opportunity not found.'}});const submissions=await Submission.find({userId:req.user.id}).select('_id');const reviews=await Review.find({submissionId:{$in:submissions.map(s=>s._id)}}).populate({path:'submissionId',populate:{path:'attemptId',populate:{path:'taskId',select:'requiredSkills'}}});const required=new Set((opportunity.requiredSkills||[]).map(s=>s.trim().toLowerCase()));const relevantReviews=reviews.filter(r=>r.submissionId?.attemptId?.taskId?.requiredSkills?.some(s=>required.has(s.trim().toLowerCase())));const scores=relevantReviews.flatMap(r=>r.rubricScores.map(s=>({score:s.score,max:s.maxScore}))).filter(s=>s.max>0);const taskPerformance=scores.length?scores.reduce((sum,s)=>sum+s.score/s.max,0)/scores.length:0;const result=calculateMatch(user.profile,evidence,opportunity,taskPerformance);const saved=await MatchResult.create({userId:req.user.id,opportunityId:opportunity.id,...result});ok(res,saved,201);}));
 app.get('/api/matches/me',asyncRoute(async(req,res)=>ok(res,await MatchResult.find({userId:req.user.id}).populate('opportunityId').sort({calculatedAt:-1}))));
 app.get('/api/applications/me',asyncRoute(async(req,res)=>ok(res,await Application.find({userId:req.user.id}).sort({createdAt:-1}).populate('opportunityId'))));
 app.post('/api/opportunities/:id/applications',asyncRoute(async(req,res)=>{if(!await Opportunity.exists({_id:req.params.id,status:'published'}))return res.status(404).json({error:{code:'NOT_FOUND',message:'Opportunity not found.'}});const application=await Application.create({userId:req.user.id,opportunityId:req.params.id,message:z.string().max(1000).optional().parse(req.body?.message)||''});ok(res,application,201);}));

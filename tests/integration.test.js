@@ -6,9 +6,10 @@ import http from 'node:http';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import { app } from '../src/app.js';
-import { Appeal, Task } from '../src/models/Work.js';
+import { Appeal, Evidence, Task } from '../src/models/Work.js';
 import { User } from '../src/models/User.js';
 import { Application, Opportunity } from '../src/models/Venture.js';
+import { ProfileShare } from '../src/models/Sharing.js';
 
 const enabled = process.env.EVIDEX_INTEGRATION_TESTS === 'true';
 const withTimeout = (promise, ms, message) => {
@@ -31,6 +32,7 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     await mongoose.connect(process.env.MONGODB_URI, { dbName, serverSelectionTimeoutMS: 10_000 });
     await Application.init();
     await Appeal.init();
+    await ProfileShare.init();
     server = http.createServer(app);
     await new Promise((resolve, reject) => {
       server.once('error', reject);
@@ -38,10 +40,11 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     });
     const baseUrl = `http://127.0.0.1:${server.address().port}`;
 
-    const call = async (method, path, { token, body } = {}) => {
+    const call = async (method, path, { token, body, headers: extraHeaders = {} } = {}) => {
       const response = await fetch(`${baseUrl}${path}`, {
         method,
         headers: {
+          ...extraHeaders,
           ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
@@ -103,12 +106,70 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
       body: { title: 'Integration project', description: 'A temporary test project.', skills: ['Research'] },
     });
     assert.equal(project.status, 201, JSON.stringify(project.payload));
+    const projectUpdate = await call('PATCH', `/api/projects/${project.payload.data._id}`, {
+      token: student.token, body: { contribution: 'Integration test contribution.' },
+    });
+    assert.equal(projectUpdate.status, 200);
+    assert.equal(projectUpdate.payload.data.contribution, 'Integration test contribution.');
+    assert.equal((await call('PATCH', `/api/projects/${project.payload.data._id}`, { token: reviewerUser.token, body: { title: 'Unauthorized edit' } })).status, 404);
     const evidence = await call('POST', '/api/evidence', {
       token: student.token,
-      body: { title: 'Integration evidence', type: 'project', skills: ['Research'] },
+      body: { title: 'Integration evidence', type: 'project', skills: ['Research'], relatedProjectId: project.payload.data._id },
     });
     assert.equal(evidence.status, 201, JSON.stringify(evidence.payload));
-    assert.equal((await call('GET', '/api/projects/me', { token: reviewerUser.token })).payload.data.length, 0);
+    const evidenceUpdate = await call('PATCH', `/api/evidence/${evidence.payload.data._id}`, {
+      token: student.token, body: { title: 'Edited integration evidence' },
+    });
+    assert.equal(evidenceUpdate.status, 200);
+    assert.equal(evidenceUpdate.payload.data.title, 'Edited integration evidence');
+    assert.equal(evidenceUpdate.payload.data.provenance, 'user_reported');
+    const profileUpdate = await call('PATCH', '/api/profile/me', {
+      token: student.token,
+      body: { bio: 'A private test bio.', location: 'Private test location', skills: [{ name: 'Research', proficiency: 'intermediate', evidenceIds: [evidence.payload.data._id] }] },
+    });
+    assert.equal(profileUpdate.status, 200, JSON.stringify(profileUpdate.payload));
+    const otherProject = await call('POST', '/api/projects', {
+      token: reviewerUser.token, body: { title: 'Other user project' },
+    });
+    assert.equal(otherProject.status, 201, JSON.stringify(otherProject.payload));
+    assert.equal((await call('POST', '/api/profile/shares', {
+      token: student.token, body: { projectIds: [otherProject.payload.data._id] },
+    })).status, 404);
+    const createdShare = await call('POST', '/api/profile/shares', {
+      token: student.token,
+      body: { profileFields: ['displayName', 'bio', 'skills'], projectIds: [project.payload.data._id], evidenceIds: [evidence.payload.data._id], expiresInDays: 7 },
+    });
+    assert.equal(createdShare.status, 201, JSON.stringify(createdShare.payload));
+    const shareToken = createdShare.payload.data.shareToken;
+    const unsharedEvidence = await call('POST', '/api/evidence', {
+      token: student.token, body: { title: 'Unshared integration evidence', type: 'other' },
+    });
+    assert.equal(unsharedEvidence.status, 201, JSON.stringify(unsharedEvidence.payload));
+    const publicProfile = await call('GET', '/api/shared/profile', { headers: { 'X-Profile-Share': shareToken } });
+    assert.equal(publicProfile.status, 200, JSON.stringify(publicProfile.payload));
+    assert.equal(publicProfile.payload.data.profile.bio, 'A private test bio.');
+    assert.equal('location' in publicProfile.payload.data.profile, false);
+    assert.equal('email' in publicProfile.payload.data.profile, false);
+    assert.equal(publicProfile.payload.data.projects.length, 1);
+    assert.equal(publicProfile.payload.data.evidence.length, 1);
+    const storedShare = await ProfileShare.findById(createdShare.payload.data.id).select('+tokenHash');
+    assert.notEqual(storedShare.tokenHash, shareToken);
+    const shareList = await call('GET', '/api/profile/shares/me', { token: student.token });
+    assert.equal(shareList.status, 200);
+    assert.equal('tokenHash' in shareList.payload.data[0], false);
+    assert.equal((await call('DELETE', `/api/profile/shares/${createdShare.payload.data.id}`, { token: reviewerUser.token })).status, 404);
+    assert.equal((await call('DELETE', `/api/profile/shares/${createdShare.payload.data.id}`, { token: student.token })).status, 200);
+    assert.equal((await call('GET', '/api/shared/profile', { headers: { 'X-Profile-Share': shareToken } })).status, 404);
+    const expiringShare = await call('POST', '/api/profile/shares', { token: student.token, body: { profileFields: ['bio'], expiresInDays: 1 } });
+    assert.equal(expiringShare.status, 201, JSON.stringify(expiringShare.payload));
+    await ProfileShare.updateOne({ _id: expiringShare.payload.data.id }, { $set: { expiresAt: new Date(Date.now() - 1000) } });
+    assert.equal((await call('GET', '/api/shared/profile', { headers: { 'X-Profile-Share': expiringShare.payload.data.shareToken } })).status, 404);
+    const reviewerProjects = await call('GET', '/api/projects/me', { token: reviewerUser.token });
+    const studentProjects = await call('GET', '/api/projects/me', { token: student.token });
+    assert.equal(reviewerProjects.payload.data.length, 1);
+    assert.equal(reviewerProjects.payload.data[0]._id, otherProject.payload.data._id);
+    assert.equal(studentProjects.payload.data.length, 1);
+    assert.equal(studentProjects.payload.data[0]._id, project.payload.data._id);
 
     const task = await Task.create({
       title: 'Integration task', goal: 'Complete the test workflow.', description: 'Temporary integration task.',
@@ -129,6 +190,9 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     assert.equal(submission.status, 201, JSON.stringify(submission.payload));
     const submissionId = submission.payload.data._id;
     assert.equal(submission.payload.data.version, 1);
+    const taskEvidence = await Evidence.findOne({ relatedSubmissionId: submissionId });
+    assert.equal((await call('PATCH', `/api/evidence/${taskEvidence.id}`, { token: student.token, body: { title: 'Edited reviewed evidence' } })).status, 409);
+    assert.equal((await call('DELETE', `/api/evidence/${taskEvidence.id}`, { token: student.token })).status, 409);
     assert.equal((await call('POST', `/api/attempts/${attemptId}/submissions`, {
       token: student.token, body: { deliverables: [{ name: 'Summary', value: 'Duplicate submission.' }] },
     })).status, 409);
@@ -216,8 +280,19 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
 
     const dashboard = await call('GET', '/api/dashboard', { token: student.token });
     assert.equal(dashboard.status, 200, JSON.stringify(dashboard.payload));
-    assert.equal(dashboard.payload.data.counts.evidenceItems, 4);
+    assert.equal(dashboard.payload.data.counts.evidenceItems, 5);
     assert.equal(dashboard.payload.data.counts.tasksCompleted, 1);
+
+    assert.equal((await call('DELETE', `/api/evidence/${unsharedEvidence.payload.data._id}`, { token: student.token })).status, 200);
+    assert.equal((await call('DELETE', `/api/evidence/${evidence.payload.data._id}`, { token: student.token })).status, 200);
+    const profileAfterArchive = await call('GET', '/api/profile/me', { token: student.token });
+    assert.deepEqual(profileAfterArchive.payload.data.profile.skills[0].evidenceIds, []);
+    assert.equal((await call('GET', '/api/evidence/me', { token: student.token })).payload.data.length, 3);
+    assert.equal((await call('GET', '/api/dashboard', { token: student.token })).payload.data.counts.evidenceItems, 3);
+    assert.equal((await call('DELETE', `/api/projects/${project.payload.data._id}`, { token: student.token })).status, 200);
+    assert.equal((await call('GET', '/api/projects/me', { token: student.token })).payload.data.length, 0);
+    assert.equal((await call('DELETE', `/api/projects/${otherProject.payload.data._id}`, { token: reviewerUser.token })).status, 200);
+    assert.equal((await call('GET', '/api/projects/me', { token: reviewerUser.token })).payload.data.length, 0);
   } catch (error) {
     console.error('Integration journey failed:', error);
     throw error;
