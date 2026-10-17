@@ -19,6 +19,10 @@ All endpoints are prefixed `/api`; protected routes require a bearer JWT. Succes
 | GET | `/reviews/queue` | Reviewer/admin | List submissions awaiting human review |
 | GET | `/submissions/:id/reviews` | Owner/reviewer | Read permitted review history |
 | POST | `/submissions/:id/reviews` | Reviewer/admin | Persist rubric-bound human review |
+| POST | `/submissions/:id/appeals` | Owner | Appeal a rejected submission once |
+| GET | `/appeals/me` | User | List own appeals |
+| GET | `/appeals/queue` | Reviewer/admin | List pending appeals |
+| POST | `/appeals/:id/resolve` | Independent reviewer/admin | Uphold or overturn an appeal; an overturned rejection returns to Changes Requested |
 | GET/POST | `/ideas` | User | List/create own ideas |
 | POST | `/venture/deconstruct` | Owner | Analyze saved idea (sample fallback labelled) |
 | GET | `/ideas/:id/analyses` | Owner | List analysis history |
@@ -31,3 +35,5 @@ All endpoints are prefixed `/api`; protected routes require a bearer JWT. Succes
 | GET/POST | `/applications/me`, `/opportunities/:id/applications` | User | List own applications / apply; duplicate rejected |
 
 Task and evidence status meanings are explicit enum values in schemas. Match weights default to 50% skills, 30% title-linked relevant evidence, and 20% human rubric performance. Configure `MATCH_SKILL_WEIGHT`, `MATCH_EVIDENCE_WEIGHT`, and `MATCH_TASK_WEIGHT`; they must sum to 100. `MATCH_FORMULA_VERSION` is saved with each result. Unsupported mandatory eligibility rules are marked `needs_review`, never silently treated as passing.
+
+`POST /submissions/:id/verify` checks that each task-required deliverable has a non-empty submitted value. `checks_passed` means this completeness check passed; it does not mean task correctness, source accessibility, authorship, or originality was verified. The response includes warnings naming those unsupported checks.

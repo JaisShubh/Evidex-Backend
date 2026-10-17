@@ -3,7 +3,7 @@
 ## Automated checks run
 
 - `npm test` — 15 dashboard/matching/model tests passed: persisted-summary derivation, activity ordering, allowed resubmission states, scoring, configurable weights, unknown eligibility handling, excluded evidence statuses, and Mongoose ownership/status schemas.
-- `npm run test:integration` with `EVIDEX_INTEGRATION_TESTS=true` and configured `MONGODB_URI`/`JWT_SECRET` — passed against Atlas. It creates a uniquely named temporary database, runs the API journey, then drops that database. Coverage includes registration, missing/invalid tokens, role and owner checks, profile/project/evidence persistence, task attempt/submission/completeness verification/reviewer decision, sample Idea Lab analysis and saved experiment result, matching, applications and duplicate rejection, and dashboard counts.
+- `npm run test:integration` with `EVIDEX_INTEGRATION_TESTS=true` and configured `MONGODB_URI`/`JWT_SECRET` — passed against Atlas. It creates a uniquely named temporary database, runs the API journey, then drops that database. Coverage includes registration, missing/invalid tokens, role and owner checks, profile/project/evidence persistence, task attempt/submission/completeness verification/reviewer decision/independent appeal and resubmission, sample Idea Lab analysis and saved experiment result, matching, applications and duplicate rejection, and dashboard counts.
 - `npm run build` in Frontend — production build passed.
 - `node --check` across backend JavaScript modules and a dynamic import of the Express app — passed.
 - MongoDB Atlas connection and `ping` using the configured Backend environment — passed.

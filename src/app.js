@@ -6,7 +6,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { User } from './models/User.js';
-import { Project, Evidence, Task, Attempt, Submission, VerificationRun, Review } from './models/Work.js';
+import { Project, Evidence, Task, Attempt, Submission, VerificationRun, Review, Appeal } from './models/Work.js';
 import { Idea, IdeaAnalysis, Experiment, ExperimentResult, Opportunity, MatchResult, Application } from './models/Venture.js';
 import { requireAuth, requireRole } from './middleware/auth.js';
 import { deconstructIdea } from './services/gemini.service.js';
@@ -70,10 +70,63 @@ app.get('/api/submissions/me',asyncRoute(async(req,res)=>ok(res,await Submission
 app.post('/api/attempts/:id/submissions',asyncRoute(async(req,res)=>{const attempt=await Attempt.findOne({_id:req.params.id,userId:req.user.id});if(!attempt)return res.status(404).json({error:{code:'NOT_FOUND',message:'Attempt not found.'}});if(!canSubmitAttempt(attempt.status))return res.status(409).json({error:{code:'INVALID_STATUS',message:'This attempt can only be submitted once, or resubmitted after changes are requested.'}});const s=z.object({deliverables:z.array(z.object({name:text(120).min(1),value:text(3000).min(1)})).min(1).max(20),notes:text(3000).optional(),aiAssistance:text(500).optional()}).parse(req.body);const task=await Task.findById(attempt.taskId);const missing=(task?.deliverables||[]).filter(d=>d.required&&!s.deliverables.some(x=>x.name.toLowerCase()===d.name.toLowerCase()));if(missing.length)return res.status(400).json({error:{code:'VALIDATION_ERROR',message:`Required deliverables missing: ${missing.map(x=>x.name).join(', ')}`}});const version=(await Submission.countDocuments({attemptId:attempt.id}))+1;const sub=await Submission.create({...s,attemptId:attempt.id,userId:req.user.id,version});const taskTitle=task?.title||'Trial task';await Evidence.create({userId:req.user.id,type:'task_submission',title:`${taskTitle} submission v${version}`,relatedSubmissionId:sub.id,skills:task?.requiredSkills||[],provenance:'user_reported',status:'submitted'});attempt.status='submitted';attempt.submittedAt=new Date();await attempt.save();ok(res,sub,201);}));
 app.get('/api/attempts/:id/submissions',asyncRoute(async(req,res)=>{const attempt=await Attempt.findOne({_id:req.params.id,userId:req.user.id});if(!attempt)return res.status(404).json({error:{code:'NOT_FOUND',message:'Attempt not found.'}});ok(res,await Submission.find({attemptId:attempt.id,userId:req.user.id}).sort({version:1}));}));
 app.get('/api/submissions/:id/verification',asyncRoute(async(req,res)=>{const sub=await Submission.findById(req.params.id);if(!sub)return res.status(404).json({error:{code:'NOT_FOUND',message:'Submission not found.'}});if(String(sub.userId)!==req.user.id&&!['reviewer','admin'].includes(req.user.role))return res.status(404).json({error:{code:'NOT_FOUND',message:'Submission not found.'}});ok(res,{submission:sub,runs:await VerificationRun.find({submissionId:sub.id}).sort({createdAt:-1}),reviews:await Review.find({submissionId:sub.id}).sort({createdAt:1}),warnings:['Automated checks do not establish authorship.']});}));
-app.post('/api/submissions/:id/verify',asyncRoute(async(req,res)=>{const sub=await Submission.findOne({_id:req.params.id,userId:req.user.id});if(!sub)return res.status(404).json({error:{code:'NOT_FOUND',message:'Submission not found.'}});if(sub.isSample)return res.status(409).json({error:{code:'SAMPLE_RECORD',message:'Sample submissions cannot be verified.'}});const passed=sub.deliverables.length>0&&sub.deliverables.every(d=>d.name&&d.value);sub.status=passed?'checks_passed':'needs_review';await sub.save();await Evidence.updateMany({relatedSubmissionId:sub.id},{$set:{status:sub.status,provenance:'automated_check'}});await Attempt.findByIdAndUpdate(sub.attemptId,{status:sub.status});const checks=[{name:'Completeness',status:passed?'passed':'needs_review',meaning:'Required deliverable fields were submitted.'}];const warnings=['No sandboxed code execution or authorship check is implemented.'];const run=await VerificationRun.create({submissionId:sub.id,checks,results:{overallStatus:sub.status},warnings});ok(res,{submission:sub,verification:run,checks,warnings});}));
+app.post('/api/submissions/:id/verify',asyncRoute(async(req,res)=>{
+  const sub=await Submission.findOne({_id:req.params.id,userId:req.user.id});
+  if(!sub)return res.status(404).json({error:{code:'NOT_FOUND',message:'Submission not found.'}});
+  if(sub.isSample)return res.status(409).json({error:{code:'SAMPLE_RECORD',message:'Sample submissions cannot be verified.'}});
+  const attempt=await Attempt.findOne({_id:sub.attemptId,userId:req.user.id});
+  const task=attempt?await Task.findById(attempt.taskId):null;
+  if(!task)return res.status(404).json({error:{code:'NOT_FOUND',message:'Task definition not found.'}});
+  const submitted=new Map((sub.deliverables||[]).map(item=>[item.name.trim().toLowerCase(),item.value.trim()]));
+  const required=(task.deliverables||[]).filter(item=>item.required);
+  const checks=required.length?required.map(item=>{
+    const value=submitted.get(item.name.trim().toLowerCase());
+    const passed=Boolean(value);
+    return {name:`Completeness: ${item.name}`,status:passed?'passed':'failed',meaning:passed?'The required deliverable contains a non-empty value.':'The required deliverable is missing or empty.'};
+  }):[{name:'Submission content',status:sub.deliverables.length&&[...submitted.values()].every(Boolean)?'passed':'failed',meaning:'At least one non-empty deliverable was submitted.'}];
+  const passed=checks.every(check=>check.status==='passed');
+  sub.status=passed?'checks_passed':'needs_review';
+  await sub.save();
+  await Evidence.updateMany({relatedSubmissionId:sub.id},{$set:{status:sub.status,provenance:'automated_check'}});
+  await Attempt.findByIdAndUpdate(sub.attemptId,{status:sub.status});
+  const warnings=['Only deliverable completeness is checked. Task-specific correctness, source accessibility, Git work history, similarity, and authorship are not checked.'];
+  const run=await VerificationRun.create({submissionId:sub.id,checks,results:{overallStatus:sub.status},warnings});
+  ok(res,{submission:sub,verification:run,checks,warnings});
+}));
 app.get('/api/reviews/queue',requireRole('reviewer','admin'),asyncRoute(async(_req,res)=>ok(res,await Submission.find({isSample:{$ne:true},status:{$in:['submitted','checks_passed','needs_review']}}).sort({submittedAt:1}).limit(100).populate({path:'attemptId',populate:{path:'taskId',select:'title category difficulty rubric'}}))));
 app.get('/api/submissions/:id/reviews',asyncRoute(async(req,res)=>{const sub=await Submission.findById(req.params.id);if(!sub)return res.status(404).json({error:{code:'NOT_FOUND',message:'Submission not found.'}});if(String(sub.userId)!==req.user.id&&!['reviewer','admin'].includes(req.user.role))return res.status(404).json({error:{code:'NOT_FOUND',message:'Submission not found.'}});ok(res,await Review.find({submissionId:sub.id}).sort({createdAt:1}));}));
 app.post('/api/submissions/:id/reviews',requireRole('reviewer','admin'),asyncRoute(async(req,res)=>{const sub=await Submission.findById(req.params.id);if(!sub)return res.status(404).json({error:{code:'NOT_FOUND',message:'Submission not found.'}});if(sub.isSample)return res.status(409).json({error:{code:'SAMPLE_RECORD',message:'Sample submissions cannot be reviewed.'}});if(String(sub.userId)===req.user.id)return res.status(403).json({error:{code:'FORBIDDEN',message:'You cannot review your own submission.'}});if(!['submitted','checks_passed','needs_review'].includes(sub.status))return res.status(409).json({error:{code:'INVALID_STATUS',message:'This submission is not awaiting review.'}});const attempt=await Attempt.findOne({_id:sub.attemptId,userId:sub.userId});const task=attempt?await Task.findById(attempt.taskId):null;if(!task)return res.status(404).json({error:{code:'NOT_FOUND',message:'Task rubric not found.'}});const scoreSchema=z.object({criterion:text(120),score:z.number().min(0),maxScore:z.number().positive()}).refine(s=>s.score<=s.maxScore,{message:'Score cannot exceed the maximum.'});const input=z.object({rubricScores:z.array(scoreSchema).min(1).max(30),feedback:text(3000).min(1),decision:z.enum(['verified','changes_requested','rejected'])}).parse(req.body);const rubric=task.rubric||[];const invalid=input.rubricScores.length!==rubric.length||new Set(input.rubricScores.map(score=>score.criterion)).size!==rubric.length||input.rubricScores.some(score=>{const criterion=rubric.find(item=>item.criterion===score.criterion);return !criterion||Number(criterion.points)!==score.maxScore;});if(invalid)return res.status(400).json({error:{code:'INVALID_RUBRIC',message:'Provide one score for every task rubric criterion using its configured maximum.'}});const review=await Review.create({...input,submissionId:sub.id,reviewerId:req.user.id});sub.status=input.decision;await sub.save();await Evidence.updateMany({relatedSubmissionId:sub.id},{$set:{status:input.decision,provenance:'reviewed'}});await Attempt.findByIdAndUpdate(sub.attemptId,{status:input.decision});ok(res,review,201);}));
+app.get('/api/appeals/me',asyncRoute(async(req,res)=>ok(res,await Appeal.find({userId:req.user.id}).sort({createdAt:-1}).populate('submissionId','status submittedAt'))));
+app.post('/api/submissions/:id/appeals',asyncRoute(async(req,res)=>{
+  const sub=await Submission.findOne({_id:req.params.id,userId:req.user.id});
+  if(!sub)return res.status(404).json({error:{code:'NOT_FOUND',message:'Submission not found.'}});
+  if(sub.isSample)return res.status(409).json({error:{code:'SAMPLE_RECORD',message:'Sample submissions cannot be appealed.'}});
+  if(sub.status!=='rejected')return res.status(409).json({error:{code:'INVALID_STATUS',message:'Only rejected submissions can be appealed.'}});
+  const input=z.object({reason:text(2000).min(1)}).strict().parse(req.body);
+  ok(res,await Appeal.create({submissionId:sub.id,userId:req.user.id,reason:input.reason}),201);
+}));
+app.get('/api/appeals/queue',requireRole('reviewer','admin'),asyncRoute(async(_req,res)=>ok(res,await Appeal.find({status:'submitted'}).sort({createdAt:1}).limit(100).populate('submissionId','status submittedAt userId'))));
+app.post('/api/appeals/:id/resolve',requireRole('reviewer','admin'),asyncRoute(async(req,res)=>{
+  const appeal=await Appeal.findOne({_id:req.params.id,status:'submitted'});
+  if(!appeal)return res.status(404).json({error:{code:'NOT_FOUND',message:'Pending appeal not found.'}});
+  if(String(appeal.userId)===req.user.id)return res.status(403).json({error:{code:'FORBIDDEN',message:'You cannot resolve your own appeal.'}});
+  if(await Review.exists({submissionId:appeal.submissionId,reviewerId:req.user.id}))return res.status(403).json({error:{code:'FORBIDDEN',message:'The original reviewer cannot resolve this appeal.'}});
+  const input=z.object({decision:z.enum(['upheld','overturned']),resolution:text(3000).min(1)}).strict().parse(req.body);
+  const sub=await Submission.findById(appeal.submissionId);
+  if(!sub)return res.status(404).json({error:{code:'NOT_FOUND',message:'Submission not found.'}});
+  appeal.status=input.decision;
+  appeal.resolution=input.resolution;
+  appeal.resolverId=req.user.id;
+  appeal.resolvedAt=new Date();
+  await appeal.save();
+  if(input.decision==='overturned'){
+    sub.status='changes_requested';
+    await sub.save();
+    await Attempt.findByIdAndUpdate(sub.attemptId,{status:'changes_requested'});
+    await Evidence.updateMany({relatedSubmissionId:sub.id},{$set:{status:'changes_requested'}});
+  }
+  ok(res,{appeal,submission:sub});
+}));
 app.get('/api/ideas',asyncRoute(async(req,res)=>ok(res,await Idea.find({userId:req.user.id}).sort({updatedAt:-1}))));
 app.post('/api/ideas',asyncRoute(async(req,res)=>{const idea=await Idea.create({...z.object({title:text(120).min(1),description:text(5000).min(1),targetCustomer:text(500).optional(),problem:text(1000).optional(),proposedSolution:text(1000).optional(),alternatives:text(1000).optional()}).parse(req.body),userId:req.user.id});ok(res,idea,201);}));
 app.post('/api/venture/deconstruct',aiLimiter,asyncRoute(async(req,res)=>{const idea=await Idea.findOne({_id:z.string().regex(/^[a-f\d]{24}$/i).parse(req.body?.ideaId),userId:req.user.id});if(!idea)return res.status(404).json({error:{code:'NOT_FOUND',message:'Idea not found.'}});let generated;try{generated=await deconstructIdea(idea);}catch(err){console.error('Gemini request failed',err?.message);return res.status(503).json({error:{code:'AI_UNAVAILABLE',message:'Idea analysis is temporarily unavailable. Your saved idea is safe; please retry or continue manually.'}});}const saved=await IdeaAnalysis.create({ideaId:idea.id,userId:req.user.id,model:generated.model,source:generated.source,...generated.data});const experiments=await Experiment.insertMany(generated.data.experiments.map(e=>({...e,ideaId:idea.id,userId:req.user.id,status:'planned'})));idea.status='test_planned';await idea.save();ok(res,{analysis:saved,experiments,notice:generated.source==='sample'?'Sample response — not generated live. Configure GEMINI_API_KEY for live analysis.':'AI-generated suggestions, not verified facts or market research.'},201);}));

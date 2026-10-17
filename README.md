@@ -16,7 +16,7 @@ API: `http://localhost:4000`; UI: `http://localhost:5173`. `CLIENT_ORIGIN` and `
 
 - Account registration and sign-in with bcrypt password hashing and signed bearer tokens.
 - Owned, private-by-default profile, projects, and evidence records.
-- Published tasks, attempts bound to task version, required deliverables, versioned submissions/history, persisted completeness-check runs, linked evidence, and rubric-bound reviewer decisions.
+- Published tasks, attempts bound to task version, required deliverables, versioned submissions/history, persisted completeness-check runs, linked evidence, rubric-bound reviewer decisions, and independent appeals that can reopen a rejected submission for resubmission.
 - Idea Lab with Gemini structured JSON output, Zod validation, saved analysis metadata, rate limiting, explicitly labelled sample output, experiment plans, and separately stored actual results with optional founder-entered outcome.
 - Deterministic skill, linked-evidence, and reviewer-rubric matching with configurable/versioned weights, an explanation, and explicit eligible / not eligible / needs review states.
 - Published opportunity browsing and persisted applications.
@@ -34,7 +34,7 @@ See [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md). `npm test` runs the 15 unit/schema
 ## Limitations and planned scope
 
 - Public profile sharing is not exposed; profiles remain accessible only to their owner and authorized reviewers. The visibility field is stored but no public profile endpoint exists.
-- Verification checks required submitted fields only. No sandbox execution, URL content verification, Git metadata integration, similarity service, or authorship determination is implemented.
+- Verification checks every task-required deliverable for a non-empty submitted value and clearly reports its limits. No sandbox execution, source URL accessibility, Git metadata integration, similarity service, or authorship determination is implemented.
 - Reviewer accounts are not created via public signup; provision one explicitly for reviewer workflow testing.
 - No file uploads, resume parsing, voice input, location discovery, team builder, scoped business briefs, resource swaps, invitations, payments, or proctoring.
 - Match score weights default to 50% skills, 30% skill-linked evidence, and 20% human rubric performance; configure them in `.env`, and treat them as unvalidated prototype assumptions. Unknown eligibility rules require manual review.

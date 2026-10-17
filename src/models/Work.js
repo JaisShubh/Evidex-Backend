@@ -8,3 +8,14 @@ export const Attempt = mongoose.model('Attempt', new Schema({ userId: { type: Sc
 export const Submission = mongoose.model('Submission', new Schema({ attemptId: { type: Schema.Types.ObjectId, ref: 'Attempt', required: true, index: true }, userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true }, version: { type: Number, required: true }, isSample: { type: Boolean, default: false }, deliverables: [{ name: String, value: String }], notes: { type: String, maxlength: 3000, default: '' }, aiAssistance: { type: String, maxlength: 500, default: '' }, status: { type: String, enum: ['submitted','checks_passed','needs_review','verified','changes_requested','rejected'], default: 'submitted' }, submittedAt: { type: Date, default: Date.now } }, { timestamps: true }));
 export const VerificationRun = mongoose.model('VerificationRun', new Schema({ submissionId: { type: Schema.Types.ObjectId, ref: 'Submission', required: true, index: true }, checks: [{ name: { type: String, required: true }, status: { type: String, enum: ['passed','failed','needs_review'], required: true }, meaning: { type: String, required: true } }], results: { overallStatus: { type: String, enum: ['checks_passed','needs_review'], required: true } }, warnings: [String] }, { timestamps: true }));
 export const Review = mongoose.model('Review', new Schema({ submissionId: { type: Schema.Types.ObjectId, ref: 'Submission', required: true, index: true }, reviewerId: { type: Schema.Types.ObjectId, ref: 'User', required: true }, rubricScores: [{ criterion: String, score: Number, maxScore: Number }], feedback: { type: String, required: true, maxlength: 3000 }, decision: { type: String, enum: ['verified','changes_requested','rejected'], required: true } }, { timestamps: true }));
+const appealSchema = new Schema({
+  submissionId: { type: Schema.Types.ObjectId, ref: 'Submission', required: true, index: true },
+  userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  reason: { type: String, required: true, trim: true, maxlength: 2000 },
+  status: { type: String, enum: ['submitted','upheld','overturned'], default: 'submitted' },
+  resolution: { type: String, trim: true, maxlength: 3000, default: '' },
+  resolverId: { type: Schema.Types.ObjectId, ref: 'User' },
+  resolvedAt: Date,
+}, { timestamps: true });
+appealSchema.index({ submissionId: 1, userId: 1 }, { unique: true });
+export const Appeal = mongoose.model('Appeal', appealSchema);

@@ -6,7 +6,7 @@ import http from 'node:http';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import { app } from '../src/app.js';
-import { Task } from '../src/models/Work.js';
+import { Appeal, Task } from '../src/models/Work.js';
 import { User } from '../src/models/User.js';
 import { Application, Opportunity } from '../src/models/Venture.js';
 
@@ -30,6 +30,7 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
   try {
     await mongoose.connect(process.env.MONGODB_URI, { dbName, serverSelectionTimeoutMS: 10_000 });
     await Application.init();
+    await Appeal.init();
     server = http.createServer(app);
     await new Promise((resolve, reject) => {
       server.once('error', reject);
@@ -62,8 +63,11 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
 
     const student = await register('Integration Student');
     const reviewerUser = await register('Integration Reviewer');
+    const appealReviewerUser = await register('Appeal Reviewer');
     await User.updateOne({ _id: reviewerUser.user.id }, { $set: { role: 'reviewer' } });
+    await User.updateOne({ _id: appealReviewerUser.user.id }, { $set: { role: 'reviewer' } });
     const reviewerToken = jwt.sign({ id: reviewerUser.user.id, role: 'reviewer' }, process.env.JWT_SECRET, { expiresIn: '5m' });
+    const appealReviewerToken = jwt.sign({ id: appealReviewerUser.user.id, role: 'reviewer' }, process.env.JWT_SECRET, { expiresIn: '5m' });
 
     assert.equal((await call('GET', '/api/profile/me')).status, 401);
     assert.equal((await call('GET', '/api/profile/me', { token: 'invalid.token.value' })).payload.error.code, 'INVALID_TOKEN');
@@ -92,6 +96,9 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     assert.equal(attempt.status, 201, JSON.stringify(attempt.payload));
     const attemptId = attempt.payload.data._id;
     assert.equal((await call('GET', `/api/attempts/${attemptId}/submissions`, { token: reviewerUser.token })).status, 404);
+    assert.equal((await call('POST', `/api/attempts/${attemptId}/submissions`, {
+      token: student.token, body: { deliverables: [{ name: 'Other', value: 'This does not satisfy the required Summary deliverable.' }] },
+    })).status, 400);
 
     const submission = await call('POST', `/api/attempts/${attemptId}/submissions`, {
       token: student.token, body: { deliverables: [{ name: 'Summary', value: 'A temporary test summary.' }] },
@@ -106,6 +113,8 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     const verification = await call('POST', `/api/submissions/${submissionId}/verify`, { token: student.token });
     assert.equal(verification.status, 200, JSON.stringify(verification.payload));
     assert.equal(verification.payload.data.submission.status, 'checks_passed');
+    assert.deepEqual(verification.payload.data.checks.map(({ name, status }) => ({ name, status })), [{ name: 'Completeness: Summary', status: 'passed' }]);
+    assert.match(verification.payload.data.warnings[0], /correctness.*not checked/);
     assert.equal((await call('GET', `/api/submissions/${submissionId}/verification`, { token: reviewerUser.token })).status, 404);
     assert.equal((await call('GET', `/api/submissions/${submissionId}/verification`, { token: reviewerToken })).status, 200);
 
@@ -115,6 +124,39 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     });
     assert.equal(review.status, 201, JSON.stringify(review.payload));
     assert.equal((await call('GET', `/api/submissions/${submissionId}/reviews`, { token: student.token })).payload.data.length, 1);
+
+    const appealAttempt = await call('POST', `/api/tasks/${task.id}/attempts`, { token: student.token });
+    assert.equal(appealAttempt.status, 201, JSON.stringify(appealAttempt.payload));
+    const appealAttemptId = appealAttempt.payload.data._id;
+    const appealSubmission = await call('POST', `/api/attempts/${appealAttemptId}/submissions`, {
+      token: student.token, body: { deliverables: [{ name: 'Summary', value: 'A second temporary test summary.' }] },
+    });
+    assert.equal(appealSubmission.status, 201, JSON.stringify(appealSubmission.payload));
+    const appealSubmissionId = appealSubmission.payload.data._id;
+    const rejection = await call('POST', `/api/submissions/${appealSubmissionId}/reviews`, {
+      token: reviewerToken,
+      body: { rubricScores: [{ criterion: 'Clarity', score: 2, maxScore: 10 }], feedback: 'Integration rejection for appeal workflow.', decision: 'rejected' },
+    });
+    assert.equal(rejection.status, 201, JSON.stringify(rejection.payload));
+    const appeal = await call('POST', `/api/submissions/${appealSubmissionId}/appeals`, {
+      token: student.token, body: { reason: 'Please reconsider this test rejection.' },
+    });
+    assert.equal(appeal.status, 201, JSON.stringify(appeal.payload));
+    assert.equal((await call('GET', '/api/appeals/queue', { token: student.token })).status, 403);
+    assert.equal((await call('GET', '/api/appeals/me', { token: student.token })).payload.data.length, 1);
+    assert.equal((await call('POST', `/api/appeals/${appeal.payload.data._id}/resolve`, {
+      token: reviewerToken, body: { decision: 'overturned', resolution: 'Original reviewer cannot decide this appeal.' },
+    })).status, 403);
+    const appealResolution = await call('POST', `/api/appeals/${appeal.payload.data._id}/resolve`, {
+      token: appealReviewerToken, body: { decision: 'overturned', resolution: 'Reopen for a corrected submission.' },
+    });
+    assert.equal(appealResolution.status, 200, JSON.stringify(appealResolution.payload));
+    assert.equal(appealResolution.payload.data.submission.status, 'changes_requested');
+    const resubmission = await call('POST', `/api/attempts/${appealAttemptId}/submissions`, {
+      token: student.token, body: { deliverables: [{ name: 'Summary', value: 'A resubmission after the appeal was overturned.' }] },
+    });
+    assert.equal(resubmission.status, 201, JSON.stringify(resubmission.payload));
+    assert.equal(resubmission.payload.data.version, 2);
 
     const idea = await call('POST', '/api/ideas', {
       token: student.token,
@@ -151,7 +193,7 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
 
     const dashboard = await call('GET', '/api/dashboard', { token: student.token });
     assert.equal(dashboard.status, 200, JSON.stringify(dashboard.payload));
-    assert.equal(dashboard.payload.data.counts.evidenceItems, 2);
+    assert.equal(dashboard.payload.data.counts.evidenceItems, 4);
     assert.equal(dashboard.payload.data.counts.tasksCompleted, 1);
   } catch (error) {
     console.error('Integration journey failed:', error);
