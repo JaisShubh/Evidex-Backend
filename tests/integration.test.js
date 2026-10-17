@@ -8,7 +8,7 @@ import mongoose from 'mongoose';
 import { app } from '../src/app.js';
 import { Appeal, Evidence } from '../src/models/Work.js';
 import { User } from '../src/models/User.js';
-import { Application, Opportunity } from '../src/models/Venture.js';
+import { Application } from '../src/models/Venture.js';
 import { ProfileShare } from '../src/models/Sharing.js';
 
 const enabled = process.env.EVIDEX_INTEGRATION_TESTS === 'true';
@@ -54,17 +54,18 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
       return { status: response.status, payload };
     };
 
-    const register = async (label) => {
+    const register = async (label, role = 'student') => {
       const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
       const email = `${slug}-${crypto.randomUUID()}@example.com`;
       const result = await call('POST', '/api/auth/register', {
-        body: { name: label, email, password: 'Integration-Test-Password-42' },
+        body: { name: label, email, password: 'Integration-Test-Password-42', ...(role === 'student' ? {} : { role }) },
       });
       assert.equal(result.status, 201, JSON.stringify(result.payload));
       return { token: result.payload.data.token, user: result.payload.data.user, email };
     };
 
     const student = await register('Integration Student');
+    const founder = await register('Integration Founder', 'founder');
     const reviewerUser = await register('Integration Reviewer');
     const appealReviewerUser = await register('Appeal Reviewer');
     const adminUser = await register('Integration Admin');
@@ -295,19 +296,52 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     assert.equal(result.status, 201, JSON.stringify(result.payload));
     assert.equal((await call('GET', `/api/ideas/${idea.payload.data._id}/results`, { token: student.token })).payload.data.length, 1);
 
-    const opportunity = await Opportunity.create({
-      title: 'Integration opportunity', provider: 'Temporary test provider', description: 'Temporary test record.',
-      requiredSkills: ['Research'], eligibility: [], status: 'published',
+    const opportunityCreated = await call('POST', '/api/opportunities', {
+      token: founder.token,
+      body: { title: 'Integration opportunity', provider: 'Temporary test provider', description: 'Temporary test record.', requiredSkills: ['Research'], eligibility: [] },
     });
-    const match = await call('POST', '/api/match/calculate', { token: student.token, body: { opportunityId: opportunity.id } });
+    assert.equal(opportunityCreated.status, 201, JSON.stringify(opportunityCreated.payload));
+    assert.equal(opportunityCreated.payload.data.status, 'draft');
+    const opportunityId = opportunityCreated.payload.data._id;
+    assert.equal((await call('GET', '/api/opportunities', { token: student.token })).payload.data.length, 0);
+    assert.equal((await call('PATCH', `/api/opportunities/${opportunityId}`, { token: founder.token, body: { status: 'published' } })).status, 403);
+    const publishedOpportunity = await call('PATCH', `/api/opportunities/${opportunityId}`, { token: adminToken, body: { status: 'published' } });
+    assert.equal(publishedOpportunity.status, 200, JSON.stringify(publishedOpportunity.payload));
+    const founderOpportunities = await call('GET', '/api/owner/opportunities', { token: founder.token });
+    assert.equal(founderOpportunities.payload.data.length, 1);
+    const match = await call('POST', '/api/match/calculate', { token: student.token, body: { opportunityId } });
     assert.equal(match.status, 201, JSON.stringify(match.payload));
     assert.ok(Number.isFinite(match.payload.data.score));
     assert.equal((await call('GET', '/api/matches/me', { token: student.token })).payload.data.length, 1);
 
-    const application = await call('POST', `/api/opportunities/${opportunity.id}/applications`, { token: student.token, body: { message: 'Integration application.' } });
+    const application = await call('POST', `/api/opportunities/${opportunityId}/applications`, { token: student.token, body: { message: 'Integration application.' } });
     assert.equal(application.status, 201, JSON.stringify(application.payload));
-    assert.equal((await call('POST', `/api/opportunities/${opportunity.id}/applications`, { token: student.token, body: {} })).status, 409);
-    assert.equal((await call('GET', '/api/applications/me', { token: student.token })).payload.data.length, 1);
+    const applicationId = application.payload.data._id;
+    assert.equal((await call('POST', `/api/opportunities/${opportunityId}/applications`, { token: student.token, body: {} })).status, 409);
+    assert.equal((await call('GET', `/api/opportunities/${opportunityId}/applications`, { token: student.token })).status, 403);
+    const ownerApplications = await call('GET', `/api/opportunities/${opportunityId}/applications`, { token: founder.token });
+    assert.equal(ownerApplications.status, 200);
+    assert.equal(ownerApplications.payload.data.length, 1);
+    assert.equal('email' in ownerApplications.payload.data[0], false);
+    assert.equal((await call('PATCH', `/api/applications/${applicationId}/status`, { token: student.token, body: { status: 'accepted' } })).status, 403);
+    assert.equal((await call('PATCH', `/api/applications/${applicationId}/status`, { token: founder.token, body: { status: 'reviewing' } })).status, 200);
+    const accepted = await call('PATCH', `/api/applications/${applicationId}/status`, { token: founder.token, body: { status: 'accepted' } });
+    assert.equal(accepted.status, 200);
+    assert.equal(accepted.payload.data.statusHistory.length, 2);
+    assert.equal((await call('POST', `/api/applications/${applicationId}/withdraw`, { token: student.token })).status, 409);
+
+    const withdrawalOpportunity = await call('POST', '/api/opportunities', {
+      token: adminToken,
+      body: { title: 'Withdrawal test opportunity', provider: 'Temporary admin provider', description: 'Temporary withdrawal test.', status: 'published' },
+    });
+    assert.equal(withdrawalOpportunity.status, 201);
+    const withdrawalApplication = await call('POST', `/api/opportunities/${withdrawalOpportunity.payload.data._id}/applications`, { token: student.token, body: {} });
+    assert.equal(withdrawalApplication.status, 201);
+    assert.equal((await call('POST', `/api/applications/${withdrawalApplication.payload.data._id}/withdraw`, { token: reviewerUser.token })).status, 404);
+    const withdrawn = await call('POST', `/api/applications/${withdrawalApplication.payload.data._id}/withdraw`, { token: student.token });
+    assert.equal(withdrawn.status, 200);
+    assert.equal(withdrawn.payload.data.status, 'withdrawn');
+    assert.equal((await call('GET', '/api/applications/me', { token: student.token })).payload.data.length, 2);
 
     const dashboard = await call('GET', '/api/dashboard', { token: student.token });
     assert.equal(dashboard.status, 200, JSON.stringify(dashboard.payload));
@@ -324,6 +358,10 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     assert.equal((await call('GET', '/api/projects/me', { token: student.token })).payload.data.length, 0);
     assert.equal((await call('DELETE', `/api/projects/${otherProject.payload.data._id}`, { token: reviewerUser.token })).status, 200);
     assert.equal((await call('GET', '/api/projects/me', { token: reviewerUser.token })).payload.data.length, 0);
+    assert.equal((await call('DELETE', `/api/opportunities/${opportunityId}`, { token: founder.token })).status, 200);
+    assert.equal((await call('GET', '/api/opportunities', { token: student.token })).payload.data.length, 1);
+    assert.equal((await call('DELETE', `/api/opportunities/${withdrawalOpportunity.payload.data._id}`, { token: adminToken })).status, 200);
+    assert.equal((await call('GET', '/api/opportunities', { token: student.token })).payload.data.length, 0);
     const archivedTask = await call('DELETE', `/api/admin/tasks/${taskId}`, { token: adminToken });
     assert.equal(archivedTask.status, 200);
     assert.equal(archivedTask.payload.data.status, 'archived');

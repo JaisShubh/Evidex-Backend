@@ -297,10 +297,62 @@ app.get('/api/ideas/:id/analyses',asyncRoute(async(req,res)=>{const idea=await I
 app.get('/api/ideas/:id/results',asyncRoute(async(req,res)=>{const idea=await Idea.exists({_id:req.params.id,userId:req.user.id});if(!idea)return res.status(404).json({error:{code:'NOT_FOUND',message:'Idea not found.'}});const experiments=await Experiment.find({ideaId:req.params.id,userId:req.user.id}).select('_id');ok(res,await ExperimentResult.find({experimentId:{$in:experiments.map(e=>e._id)},userId:req.user.id}).sort({createdAt:-1}));}));
 app.get('/api/ideas/:id/experiments',asyncRoute(async(req,res)=>{const idea=await Idea.exists({_id:req.params.id,userId:req.user.id});if(!idea)return res.status(404).json({error:{code:'NOT_FOUND',message:'Idea not found.'}});ok(res,await Experiment.find({ideaId:req.params.id,userId:req.user.id}).sort({createdAt:-1}));}));
 app.post('/api/experiments/:id/results',asyncRoute(async(req,res)=>{const exp=await Experiment.findOne({_id:req.params.id,userId:req.user.id});if(!exp)return res.status(404).json({error:{code:'NOT_FOUND',message:'Experiment not found.'}});const input=z.object({observations:text(4000).min(1),metricValue:text(300).optional(),outcome:z.enum(['supported','contradicted','inconclusive']).optional(),evidenceIds:z.array(z.string().regex(/^[a-f\d]{24}$/i)).max(20).optional(),limitations:text(1000).optional()}).parse(req.body);if(input.evidenceIds?.length){const count=await Evidence.countDocuments({_id:{$in:input.evidenceIds},userId:req.user.id,archivedAt:null});if(count!==new Set(input.evidenceIds).size)return res.status(404).json({error:{code:'NOT_FOUND',message:'One or more evidence records were not found.'}});}const result=await ExperimentResult.create({...input,experimentId:exp.id,userId:req.user.id});exp.status='recorded';await exp.save();await Idea.findOneAndUpdate({_id:exp.ideaId,userId:req.user.id},{status:input.outcome||'test_recorded'});ok(res,result,201);}));
-app.get('/api/opportunities',asyncRoute(async(_req,res)=>ok(res,await Opportunity.find({status:'published'}))));
+const opportunitySchema=z.object({title:text(160).min(1),provider:text(160).min(1),description:text(4000).min(1),roleType:text(80).optional(),requiredSkills:z.array(text(60).min(1)).max(40).default([]),eligibility:z.array(text(300).min(1)).max(30).default([]),remote:z.boolean().optional(),location:text(160).optional(),status:z.enum(['draft','published']).optional()}).strict();
+app.get('/api/opportunities',asyncRoute(async(_req,res)=>ok(res,await Opportunity.find({status:'published'}).sort({createdAt:-1}))));
+app.get('/api/owner/opportunities',requireRole('founder','admin'),asyncRoute(async(req,res)=>ok(res,await Opportunity.find(req.user.role==='admin'?{}:{ownerId:req.user.id}).sort({updatedAt:-1}))));
+app.post('/api/opportunities',requireRole('founder','admin'),asyncRoute(async(req,res)=>{
+  const input=opportunitySchema.parse(req.body);
+  if(req.user.role==='founder'&&input.status&&input.status!=='draft')return res.status(403).json({error:{code:'FORBIDDEN',message:'Only an admin can publish an opportunity.'}});
+  const opportunity=await Opportunity.create({...input,ownerId:req.user.id,status:req.user.role==='admin'?(input.status||'draft'):'draft'});
+  ok(res,opportunity,201);
+}));
+app.patch('/api/opportunities/:id',requireRole('founder','admin'),asyncRoute(async(req,res)=>{
+  const fields=opportunitySchema.partial().refine(value=>Object.keys(value).length>0).parse(req.body);
+  const opportunity=await Opportunity.findOne({_id:req.params.id,status:{$ne:'closed'}});
+  if(!opportunity||req.user.role!=='admin'&&String(opportunity.ownerId)!==req.user.id)return res.status(404).json({error:{code:'NOT_FOUND',message:'Opportunity not found.'}});
+  if(req.user.role!=='admin'&&opportunity.status!=='draft')return res.status(409).json({error:{code:'INVALID_STATUS',message:'Only draft opportunities can be edited by their owner.'}});
+  if(req.user.role==='founder'&&fields.status)return res.status(403).json({error:{code:'FORBIDDEN',message:'Only an admin can change opportunity publication status.'}});
+  Object.assign(opportunity,fields);
+  await opportunity.save();
+  ok(res,opportunity);
+}));
+app.delete('/api/opportunities/:id',requireRole('founder','admin'),asyncRoute(async(req,res)=>{
+  const opportunity=await Opportunity.findOne({_id:req.params.id,status:{$ne:'closed'}});
+  if(!opportunity||req.user.role!=='admin'&&String(opportunity.ownerId)!==req.user.id)return res.status(404).json({error:{code:'NOT_FOUND',message:'Opportunity not found.'}});
+  opportunity.status='closed';
+  await opportunity.save();
+  ok(res,{id:opportunity.id,status:opportunity.status});
+}));
+app.get('/api/opportunities/:id/applications',requireRole('founder','admin'),asyncRoute(async(req,res)=>{
+  const opportunity=await Opportunity.findById(req.params.id);
+  if(!opportunity||req.user.role!=='admin'&&String(opportunity.ownerId)!==req.user.id)return res.status(404).json({error:{code:'NOT_FOUND',message:'Opportunity not found.'}});
+  ok(res,await Application.find({opportunityId:opportunity.id}).sort({createdAt:-1}).select('userId status statusHistory message createdAt updatedAt'));
+}));
 app.post('/api/match/calculate',asyncRoute(async(req,res)=>{const [user,evidence,opportunity]=await Promise.all([User.findById(req.user.id),Evidence.find({userId:req.user.id,archivedAt:null}),Opportunity.findOne({_id:req.body?.opportunityId,status:'published'})]);if(!user)return res.status(404).json({error:{code:'NOT_FOUND',message:'User not found.'}});if(!opportunity)return res.status(404).json({error:{code:'NOT_FOUND',message:'Opportunity not found.'}});const submissions=await Submission.find({userId:req.user.id}).select('_id');const reviews=await Review.find({submissionId:{$in:submissions.map(s=>s._id)}}).populate({path:'submissionId',populate:{path:'attemptId',populate:{path:'taskId',select:'requiredSkills'}}});const required=new Set((opportunity.requiredSkills||[]).map(s=>s.trim().toLowerCase()));const relevantReviews=reviews.filter(r=>{const attempt=r.submissionId?.attemptId;const skills=attempt?.taskSnapshot?.requiredSkills||attempt?.taskId?.requiredSkills||[];return skills.some(s=>required.has(s.trim().toLowerCase()));});const scores=relevantReviews.flatMap(r=>r.rubricScores.map(s=>({score:s.score,max:s.maxScore}))).filter(s=>s.max>0);const taskPerformance=scores.length?scores.reduce((sum,s)=>sum+s.score/s.max,0)/scores.length:0;const result=calculateMatch(user.profile,evidence,opportunity,taskPerformance);const saved=await MatchResult.create({userId:req.user.id,opportunityId:opportunity.id,...result});ok(res,saved,201);}));
 app.get('/api/matches/me',asyncRoute(async(req,res)=>ok(res,await MatchResult.find({userId:req.user.id}).populate('opportunityId').sort({calculatedAt:-1}))));
 app.get('/api/applications/me',asyncRoute(async(req,res)=>ok(res,await Application.find({userId:req.user.id}).sort({createdAt:-1}).populate('opportunityId'))));
 app.post('/api/opportunities/:id/applications',asyncRoute(async(req,res)=>{if(!await Opportunity.exists({_id:req.params.id,status:'published'}))return res.status(404).json({error:{code:'NOT_FOUND',message:'Opportunity not found.'}});const application=await Application.create({userId:req.user.id,opportunityId:req.params.id,message:z.string().max(1000).optional().parse(req.body?.message)||''});ok(res,application,201);}));
+app.patch('/api/applications/:id/status',requireRole('founder','admin'),asyncRoute(async(req,res)=>{
+  const input=z.object({status:z.enum(['reviewing','accepted','rejected'])}).strict().parse(req.body);
+  const application=await Application.findById(req.params.id);
+  if(!application)return res.status(404).json({error:{code:'NOT_FOUND',message:'Application not found.'}});
+  const opportunity=await Opportunity.findById(application.opportunityId);
+  if(!opportunity||req.user.role!=='admin'&&String(opportunity.ownerId)!==req.user.id)return res.status(404).json({error:{code:'NOT_FOUND',message:'Application not found.'}});
+  if(!['submitted','reviewing'].includes(application.status))return res.status(409).json({error:{code:'INVALID_STATUS',message:'This application is already closed.'}});
+  const previousStatus=application.status;
+  application.statusHistory.push({actorId:req.user.id,fromStatus:previousStatus,toStatus:input.status});
+  application.status=input.status;
+  await application.save();
+  ok(res,application);
+}));
+app.post('/api/applications/:id/withdraw',asyncRoute(async(req,res)=>{
+  const application=await Application.findOne({_id:req.params.id,userId:req.user.id});
+  if(!application)return res.status(404).json({error:{code:'NOT_FOUND',message:'Application not found.'}});
+  if(!['submitted','reviewing'].includes(application.status))return res.status(409).json({error:{code:'INVALID_STATUS',message:'This application can no longer be withdrawn.'}});
+  application.statusHistory.push({actorId:req.user.id,fromStatus:application.status,toStatus:'withdrawn'});
+  application.status='withdrawn';
+  await application.save();
+  ok(res,application);
+}));
 app.use('/api',(_req,res)=>res.status(404).json({error:{code:'NOT_FOUND',message:'API route not found.'}}));
 app.use((err,req,res,_next)=>{if(err?.type==='entity.parse.failed')return res.status(400).json({error:{code:'INVALID_JSON',message:'Request body must contain valid JSON.'}});if(err?.type==='entity.too.large')return res.status(413).json({error:{code:'PAYLOAD_TOO_LARGE',message:'Request body is too large.'}});if(err instanceof z.ZodError)return res.status(400).json({error:{code:'VALIDATION_ERROR',message:'Please check the submitted fields.',details:err.issues.map(i=>({path:i.path.join('.'),message:i.message}))}});if(err?.code===11000)return res.status(409).json({error:{code:'CONFLICT',message:'This record already exists.'}});if(err?.name==='CastError')return res.status(400).json({error:{code:'INVALID_ID',message:'Record ID is invalid.'}});console.error('API error',err?.message);res.status(500).json({error:{code:'INTERNAL_ERROR',message:'Something went wrong. Please try again.'}});});

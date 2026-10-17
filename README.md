@@ -19,7 +19,7 @@ API: `http://localhost:4000`; UI: `http://localhost:5173`. `CLIENT_ORIGIN` and `
 - Admin-managed draft/published/archived tasks with immutable attempt snapshots, required deliverables, versioned submissions/history, persisted completeness-check runs, linked evidence, rubric-bound reviewer decisions, and independent appeals that can reopen a rejected submission for resubmission.
 - Idea Lab with Gemini structured JSON output, Zod validation, versioned analysis metadata, labelled sample fallback on missing keys or provider errors, evidence-linked research records, deduplicated experiment plans, and separately stored actual results with optional founder-entered outcome.
 - Deterministic skill, linked-evidence, and reviewer-rubric matching with configurable/versioned weights, an explanation, and explicit eligible / not eligible / needs review states.
-- Published opportunity browsing and persisted applications.
+- Founder/admin-managed opportunity drafts and publication, explainable matching, persisted applications, owner review/status history, and applicant withdrawal.
 - Authenticated dashboard summary derived from the user's saved evidence, verified tasks, review states, recent activity, ideas, planned experiments and latest saved match.
 - Seeded example task and two opportunities. Set demo credentials to seed a clearly labelled sample user, Idea Lab response, and task submission. Sample evidence is excluded from matching; no reviews, customer observations, or employment outcomes are fabricated.
 

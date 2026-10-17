@@ -39,9 +39,14 @@ All endpoints are prefixed `/api`; protected routes require a bearer JWT. Succes
 | GET | `/ideas/:id/results` | Owner | Reload user-recorded experiment results |
 | POST | `/experiments/:id/results` | Owner | Record actual observations and optional outcome; linked evidence must belong to the user |
 | GET | `/opportunities` | User | Published opportunities |
+| GET/POST | `/owner/opportunities` and `/opportunities` | Founder/admin | List owned opportunities or create a draft |
+| PATCH/DELETE | `/opportunities/:id` | Owner/admin | Edit a draft or close an opportunity; admins may publish |
+| GET | `/opportunities/:id/applications` | Owner/admin | List applicant IDs and application status without exposing applicant profiles |
 | POST | `/match/calculate` | User | Save deterministic explainable match |
 | GET | `/matches/me` | User | Own match history |
 | GET/POST | `/applications/me`, `/opportunities/:id/applications` | User | List own applications / apply; duplicate rejected |
+| PATCH | `/applications/:id/status` | Opportunity owner/admin | Record reviewing/accepted/rejected decision history |
+| POST | `/applications/:id/withdraw` | Applicant | Withdraw own open application |
 
 Task and evidence status meanings are explicit enum values in schemas. Match weights default to 50% skills, 30% title-linked relevant evidence, and 20% human rubric performance. Configure `MATCH_SKILL_WEIGHT`, `MATCH_EVIDENCE_WEIGHT`, and `MATCH_TASK_WEIGHT`; they must sum to 100. `MATCH_FORMULA_VERSION` is saved with each result. Unsupported mandatory eligibility rules are marked `needs_review`, never silently treated as passing.
 
