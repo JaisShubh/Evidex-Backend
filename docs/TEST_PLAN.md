@@ -9,6 +9,7 @@
 - MongoDB Atlas connection and `ping` using the configured Backend environment — passed.
 - Gemini unit checks — missing-key and simulated provider-error cases both return labelled sample data without leaking provider diagnostics.
 - API app route modules imported cleanly.
+- Server module syntax check passed after adding `SIGINT`/`SIGTERM` graceful HTTP and MongoDB shutdown handling.
 
 ## Blocked in this environment
 

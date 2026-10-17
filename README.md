@@ -27,6 +27,8 @@ API: `http://localhost:4000`; UI: `http://localhost:5173`. `CLIENT_ORIGIN` and `
 
 See [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md) for the routes and response shape. Protected routes require `Authorization: Bearer <token>`. Success responses use `{data}`; errors use `{error:{code,message}}`.
 
+The API closes its HTTP listener and MongoDB connection on `SIGINT` or `SIGTERM`, with a 10-second forced-connection-close fallback. Production deployment still needs a target host, production secrets, allowed client origin, and appropriate shared rate-limit storage when running multiple instances.
+
 ## Privileged accounts
 
 Public registration only allows `student` and `founder` roles. To provision a reviewer, mentor, or initial admin, first register the account, then run `npm run provision-role -- <email> <role>` from Backend with `.env` configured. This CLI requires direct database access and does not create accounts or passwords. An admin can later change another account's role or suspend it through `PATCH /api/admin/users/:id/access`; access changes are recorded, invalidate the account's existing bearer tokens, and require the user to sign in again. Admins cannot change their own access through that API.
