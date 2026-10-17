@@ -17,6 +17,7 @@ All endpoints are prefixed `/api`; protected routes require a bearer JWT. Succes
 | GET/POST/PATCH/DELETE | `/projects/me`, `/projects`, `/projects/:id` | Owner | List/create/update/archive own projects |
 | GET/POST/PATCH/DELETE | `/evidence/me`, `/evidence`, `/evidence/:id` | Owner | List/create/update/archive own evidence; task-submission evidence is system-managed |
 | GET | `/tasks`, `/tasks/:id` | User | List/read published tasks |
+| GET/POST/PATCH/DELETE | `/admin/tasks`, `/admin/tasks/:id` | Admin | Manage drafts, publish/version tasks, or archive them |
 | POST | `/tasks/:id/attempts` | User | Start versioned attempt |
 | POST | `/attempts/:id/submissions` | Owner | Create first submission or versioned resubmission after changes are requested |
 | GET | `/submissions/me`, `/attempts/:id/submissions` | Owner | Reload submission and attempt history |
@@ -43,6 +44,8 @@ All endpoints are prefixed `/api`; protected routes require a bearer JWT. Succes
 Task and evidence status meanings are explicit enum values in schemas. Match weights default to 50% skills, 30% title-linked relevant evidence, and 20% human rubric performance. Configure `MATCH_SKILL_WEIGHT`, `MATCH_EVIDENCE_WEIGHT`, and `MATCH_TASK_WEIGHT`; they must sum to 100. `MATCH_FORMULA_VERSION` is saved with each result. Unsupported mandatory eligibility rules are marked `needs_review`, never silently treated as passing.
 
 `POST /submissions/:id/verify` checks that each task-required deliverable has a non-empty submitted value. `checks_passed` means this completeness check passed; it does not mean task correctness, source accessibility, authorship, or originality was verified. The response includes warnings naming those unsupported checks.
+
+Starting an attempt stores a snapshot of its task instructions, deliverables, required skills and rubric. Later admin edits increment the task version and affect new attempts only; submissions, verification and reviews for existing attempts continue to use their snapshot.
 
 Profile sharing is explicit and link-based. Shares expire in 1-30 days (7 by default), store only a SHA-256 token hash, and can be revoked by the owner. The public response never includes account email and returns only the selected fields and records. A general public directory is not implemented.
 

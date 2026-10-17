@@ -6,7 +6,7 @@ import http from 'node:http';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import { app } from '../src/app.js';
-import { Appeal, Evidence, Task } from '../src/models/Work.js';
+import { Appeal, Evidence } from '../src/models/Work.js';
 import { User } from '../src/models/User.js';
 import { Application, Opportunity } from '../src/models/Venture.js';
 import { ProfileShare } from '../src/models/Sharing.js';
@@ -171,14 +171,28 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     assert.equal(studentProjects.payload.data.length, 1);
     assert.equal(studentProjects.payload.data[0]._id, project.payload.data._id);
 
-    const task = await Task.create({
-      title: 'Integration task', goal: 'Complete the test workflow.', description: 'Temporary integration task.',
-      requiredSkills: ['Research'], deliverables: [{ name: 'Summary', required: true }],
-      rubric: [{ criterion: 'Clarity', points: 10, description: 'Clear summary.' }], version: 1, status: 'published',
+    const taskCreated = await call('POST', '/api/admin/tasks', {
+      token: adminToken,
+      body: { title: 'Integration task', goal: 'Complete the test workflow.', description: 'Temporary integration task.', requiredSkills: ['Research'], deliverables: [{ name: 'Summary', required: true }], rubric: [{ criterion: 'Clarity', points: 10, description: 'Clear summary.' }] },
     });
-    const attempt = await call('POST', `/api/tasks/${task.id}/attempts`, { token: student.token });
+    assert.equal(taskCreated.status, 201, JSON.stringify(taskCreated.payload));
+    assert.equal(taskCreated.payload.data.status, 'draft');
+    assert.equal((await call('POST', '/api/admin/tasks', { token: student.token, body: {} })).status, 403);
+    assert.equal((await call('GET', '/api/tasks', { token: student.token })).payload.data.length, 0);
+    const publishedTask = await call('PATCH', `/api/admin/tasks/${taskCreated.payload.data._id}`, { token: adminToken, body: { status: 'published' } });
+    assert.equal(publishedTask.status, 200, JSON.stringify(publishedTask.payload));
+    assert.equal(publishedTask.payload.data.version, 2);
+    const taskId = publishedTask.payload.data._id;
+    const attempt = await call('POST', `/api/tasks/${taskId}/attempts`, { token: student.token });
     assert.equal(attempt.status, 201, JSON.stringify(attempt.payload));
     const attemptId = attempt.payload.data._id;
+    assert.equal(attempt.payload.data.taskVersion, 2);
+    assert.equal(attempt.payload.data.taskSnapshot.rubric[0].criterion, 'Clarity');
+    const taskRevision = await call('PATCH', `/api/admin/tasks/${taskId}`, {
+      token: adminToken, body: { rubric: [{ criterion: 'Specificity', points: 12, description: 'Specific summary.' }] },
+    });
+    assert.equal(taskRevision.status, 200);
+    assert.equal(taskRevision.payload.data.version, 3);
     assert.equal((await call('GET', `/api/attempts/${attemptId}/submissions`, { token: reviewerUser.token })).status, 404);
     assert.equal((await call('POST', `/api/attempts/${attemptId}/submissions`, {
       token: student.token, body: { deliverables: [{ name: 'Other', value: 'This does not satisfy the required Summary deliverable.' }] },
@@ -212,9 +226,11 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     assert.equal(review.status, 201, JSON.stringify(review.payload));
     assert.equal((await call('GET', `/api/submissions/${submissionId}/reviews`, { token: student.token })).payload.data.length, 1);
 
-    const appealAttempt = await call('POST', `/api/tasks/${task.id}/attempts`, { token: student.token });
+    const appealAttempt = await call('POST', `/api/tasks/${taskId}/attempts`, { token: student.token });
     assert.equal(appealAttempt.status, 201, JSON.stringify(appealAttempt.payload));
     const appealAttemptId = appealAttempt.payload.data._id;
+    assert.equal(appealAttempt.payload.data.taskVersion, 3);
+    assert.equal(appealAttempt.payload.data.taskSnapshot.rubric[0].criterion, 'Specificity');
     const appealSubmission = await call('POST', `/api/attempts/${appealAttemptId}/submissions`, {
       token: student.token, body: { deliverables: [{ name: 'Summary', value: 'A second temporary test summary.' }] },
     });
@@ -222,7 +238,7 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     const appealSubmissionId = appealSubmission.payload.data._id;
     const rejection = await call('POST', `/api/submissions/${appealSubmissionId}/reviews`, {
       token: reviewerToken,
-      body: { rubricScores: [{ criterion: 'Clarity', score: 2, maxScore: 10 }], feedback: 'Integration rejection for appeal workflow.', decision: 'rejected' },
+      body: { rubricScores: [{ criterion: 'Specificity', score: 2, maxScore: 12 }], feedback: 'Integration rejection for appeal workflow.', decision: 'rejected' },
     });
     assert.equal(rejection.status, 201, JSON.stringify(rejection.payload));
     const appeal = await call('POST', `/api/submissions/${appealSubmissionId}/appeals`, {
@@ -293,6 +309,10 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     assert.equal((await call('GET', '/api/projects/me', { token: student.token })).payload.data.length, 0);
     assert.equal((await call('DELETE', `/api/projects/${otherProject.payload.data._id}`, { token: reviewerUser.token })).status, 200);
     assert.equal((await call('GET', '/api/projects/me', { token: reviewerUser.token })).payload.data.length, 0);
+    const archivedTask = await call('DELETE', `/api/admin/tasks/${taskId}`, { token: adminToken });
+    assert.equal(archivedTask.status, 200);
+    assert.equal(archivedTask.payload.data.status, 'archived');
+    assert.equal((await call('GET', '/api/tasks', { token: student.token })).payload.data.length, 0);
   } catch (error) {
     console.error('Integration journey failed:', error);
     throw error;

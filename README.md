@@ -16,7 +16,7 @@ API: `http://localhost:4000`; UI: `http://localhost:5173`. `CLIENT_ORIGIN` and `
 
 - Account registration and sign-in with bcrypt password hashing and signed bearer tokens.
 - Owned, private-by-default profile, editable/archiveable projects and evidence records, and explicitly scoped, expiring and revocable profile-share links.
-- Published tasks, attempts bound to task version, required deliverables, versioned submissions/history, persisted completeness-check runs, linked evidence, rubric-bound reviewer decisions, and independent appeals that can reopen a rejected submission for resubmission.
+- Admin-managed draft/published/archived tasks with immutable attempt snapshots, required deliverables, versioned submissions/history, persisted completeness-check runs, linked evidence, rubric-bound reviewer decisions, and independent appeals that can reopen a rejected submission for resubmission.
 - Idea Lab with Gemini structured JSON output, Zod validation, saved analysis metadata, rate limiting, explicitly labelled sample output, experiment plans, and separately stored actual results with optional founder-entered outcome.
 - Deterministic skill, linked-evidence, and reviewer-rubric matching with configurable/versioned weights, an explanation, and explicit eligible / not eligible / needs review states.
 - Published opportunity browsing and persisted applications.
