@@ -60,7 +60,7 @@ const teamSchema = new Schema({
   requiredSkills: [{ type: String, trim: true, maxlength: 60 }],
   maxMembers: { type: Number, min: 2, max: 8, default: 4 },
   status: { type: String, enum: ['open','closed'], default: 'open' },
-  members: [{ userId: { type: Schema.Types.ObjectId, ref: 'User', required: true }, joinedAt: { type: Date, default: Date.now } }],
+  members: [{ userId: { type: Schema.Types.ObjectId, ref: 'User', required: true }, role: { type: String, trim: true, maxlength: 80, default: 'Contributor' }, joinedAt: { type: Date, default: Date.now } }],
 }, { timestamps: true });
 teamSchema.index({ briefId: 1, ownerId: 1 }, { unique: true });
 export const Team = mongoose.model('Team', teamSchema);
@@ -69,6 +69,7 @@ const teamInviteSchema = new Schema({
   teamId: { type: Schema.Types.ObjectId, ref: 'Team', required: true, index: true },
   senderId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   recipientId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  teamRole: { type: String, trim: true, maxlength: 80, default: 'Contributor' },
   status: { type: String, enum: ['pending','accepted','declined','cancelled'], default: 'pending' },
   consentAt: Date,
   decidedAt: Date,
