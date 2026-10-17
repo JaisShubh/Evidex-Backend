@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { calculateMatch, getMatchingWeights } from '../src/services/matching.service.js';
+import { calculateMatch, getMatchingWeights, getSkillGapRecommendations } from '../src/services/matching.service.js';
 
 test('matching normalizes skills and explains all three score components', () => {
   const result = calculateMatch(
@@ -65,4 +65,20 @@ test('seeded sample evidence is excluded from a candidate match', () => {
 test('matching weights can be configured but must sum to 100', () => {
   assert.deepEqual(getMatchingWeights({ MATCH_SKILL_WEIGHT: '40', MATCH_EVIDENCE_WEIGHT: '35', MATCH_TASK_WEIGHT: '25' }), { skills: 40, evidence: 35, performance: 25 });
   assert.throws(() => getMatchingWeights({ MATCH_SKILL_WEIGHT: '45', MATCH_EVIDENCE_WEIGHT: '30', MATCH_TASK_WEIGHT: '20' }), /sum to 100/);
+});
+
+test('skill gap recommendations suggest published public practice tasks only', () => {
+  const result = getSkillGapRecommendations(
+    { skills: [{ name: ' Research ' }] },
+    { requiredSkills: ['Research', 'Data Analysis', 'Communication'] },
+    [
+      { _id: 'private', title: 'Private brief', requiredSkills: ['Data Analysis'], status: 'published', visibility: 'invite_only' },
+      { _id: 'draft', title: 'Draft', requiredSkills: ['Communication'], status: 'draft', visibility: 'public' },
+      { _id: 'public', title: 'Data analysis basics', requiredSkills: ['DATA ANALYSIS'], status: 'published', visibility: 'public' },
+    ],
+  );
+  assert.deepEqual(result.missingSkills, ['data analysis', 'communication']);
+  assert.equal(result.recommendations.length, 1);
+  assert.equal(result.recommendations[0].id, 'public');
+  assert.match(result.note, /does not automatically add or verify a skill/);
 });

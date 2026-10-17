@@ -14,7 +14,7 @@ import { Brief, Invitation, ResourceSwap, Team, TeamInvitation } from './models/
 import { RepositoryCheck } from './models/RepositoryCheck.js';
 import { requireAuth, requireRole } from './middleware/auth.js';
 import { deconstructIdea, draftBusinessBrief } from './services/gemini.service.js';
-import { calculateMatch } from './services/matching.service.js';
+import { calculateMatch, getSkillGapRecommendations } from './services/matching.service.js';
 import { buildDashboardSummary } from './services/dashboard.service.js';
 import { canSubmitAttempt } from './services/submission.service.js';
 import { fetchPublicGithubMetadata } from './services/github.service.js';
@@ -200,10 +200,11 @@ app.delete('/api/evidence/:id',asyncRoute(async(req,res)=>{
   ok(res,{id:evidence.id,archivedAt:evidence.archivedAt});
 }));
 const taskSchema=z.object({title:text(120).min(1),goal:text(500).min(1),description:text(5000).min(1),category:text(80).min(1).optional(),difficulty:z.enum(['Beginner','Intermediate','Advanced']).optional(),requiredSkills:z.array(text(60).min(1)).max(30).default([]),deliverables:z.array(z.object({name:text(120).min(1),required:z.boolean().default(true)}).strict()).min(1).max(30),rubric:z.array(z.object({criterion:text(120).min(1),points:z.number().positive(),description:text(1000).min(1)}).strict()).min(1).max(30),allowedTools:text(500).optional(),status:z.enum(['draft','published']).optional()}).strict();
+const taskPatchSchema=taskSchema.partial().extend({requiredSkills:z.array(text(60).min(1)).max(30).optional(),status:z.enum(['draft','published']).optional()}).strict().refine(value=>Object.keys(value).length>0);
 app.get('/api/admin/tasks',requireRole('admin'),asyncRoute(async(_req,res)=>ok(res,await Task.find({}).sort({updatedAt:-1}))));
 app.post('/api/admin/tasks',requireRole('admin'),asyncRoute(async(req,res)=>{const fields=taskSchema.parse(req.body);const task=await Task.create({...fields,category:fields.category||'General',allowedTools:fields.allowedTools||'Any tools; disclose AI assistance.',version:1,status:fields.status||'draft'});ok(res,task,201);}));
 app.patch('/api/admin/tasks/:id',requireRole('admin'),asyncRoute(async(req,res)=>{
-  const fields=taskSchema.partial().extend({status:z.enum(['draft','published']).optional()}).strict().refine(value=>Object.keys(value).length>0).parse(req.body);
+  const fields=taskPatchSchema.parse(req.body);
   const task=await Task.findOne({_id:req.params.id,status:{$ne:'archived'}});
   if(!task)return res.status(404).json({error:{code:'NOT_FOUND',message:'Task not found.'}});
   Object.assign(task,fields);
@@ -346,7 +347,7 @@ app.get('/api/briefs/:id',asyncRoute(async(req,res)=>{
   ok(res,brief);
 }));
 app.patch('/api/briefs/:id',requireRole('founder','admin'),asyncRoute(async(req,res)=>{
-  const fields=briefSchema.partial().refine(value=>Object.keys(value).length>0).parse(req.body);
+  const fields=briefSchema.partial().extend({requiredSkills:z.array(text(60).min(1)).max(30).optional()}).strict().refine(value=>Object.keys(value).length>0).parse(req.body);
   const brief=await Brief.findOne({_id:req.params.id,status:'draft'});
   if(!brief||req.user.role!=='admin'&&String(brief.ownerId)!==req.user.id)return res.status(404).json({error:{code:'NOT_FOUND',message:'Draft brief not found.'}});
   Object.assign(brief,fields);
@@ -505,7 +506,14 @@ app.post('/api/resource-swaps/:id/cancel',asyncRoute(async(req,res)=>{
   ok(res,swap);
 }));
 const opportunitySchema=z.object({title:text(160).min(1),provider:text(160).min(1),description:text(4000).min(1),roleType:text(80).optional(),requiredSkills:z.array(text(60).min(1)).max(40).default([]),eligibility:z.array(text(300).min(1)).max(30).default([]),remote:z.boolean().optional(),location:text(160).optional(),status:z.enum(['draft','published']).optional()}).strict();
+const opportunityPatchSchema=opportunitySchema.partial().extend({requiredSkills:z.array(text(60).min(1)).max(40).optional(),eligibility:z.array(text(300).min(1)).max(30).optional()}).strict().refine(value=>Object.keys(value).length>0);
 app.get('/api/opportunities',asyncRoute(async(_req,res)=>ok(res,await Opportunity.find({status:'published'}).sort({createdAt:-1}))));
+app.get('/api/opportunities/:id/skill-gaps',asyncRoute(async(req,res)=>{
+  const [user,opportunity]=await Promise.all([User.findById(req.user.id).select('profile.skills'),Opportunity.findOne({_id:req.params.id,status:'published'}).select('title requiredSkills')]);
+  if(!opportunity)return res.status(404).json({error:{code:'NOT_FOUND',message:'Opportunity not found.'}});
+  const tasks=await Task.find({status:'published',$or:[{visibility:'public'},{visibility:{$exists:false}}]}).select('title category difficulty requiredSkills status visibility');
+  ok(res,{opportunityId:opportunity.id,opportunityTitle:opportunity.title,...getSkillGapRecommendations(user?.profile||{},opportunity,tasks)});
+}));
 app.get('/api/owner/opportunities',requireRole('founder','admin'),asyncRoute(async(req,res)=>ok(res,await Opportunity.find(req.user.role==='admin'?{}:{ownerId:req.user.id}).sort({updatedAt:-1}))));
 app.post('/api/opportunities',requireRole('founder','admin'),asyncRoute(async(req,res)=>{
   const input=opportunitySchema.parse(req.body);
@@ -514,7 +522,7 @@ app.post('/api/opportunities',requireRole('founder','admin'),asyncRoute(async(re
   ok(res,opportunity,201);
 }));
 app.patch('/api/opportunities/:id',requireRole('founder','admin'),asyncRoute(async(req,res)=>{
-  const fields=opportunitySchema.partial().refine(value=>Object.keys(value).length>0).parse(req.body);
+  const fields=opportunityPatchSchema.parse(req.body);
   const opportunity=await Opportunity.findOne({_id:req.params.id,status:{$ne:'closed'}});
   if(!opportunity||req.user.role!=='admin'&&String(opportunity.ownerId)!==req.user.id)return res.status(404).json({error:{code:'NOT_FOUND',message:'Opportunity not found.'}});
   if(req.user.role!=='admin'&&opportunity.status!=='draft')return res.status(409).json({error:{code:'INVALID_STATUS',message:'Only draft opportunities can be edited by their owner.'}});

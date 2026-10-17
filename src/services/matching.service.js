@@ -34,3 +34,16 @@ export function calculateMatch(profile, evidence, opportunity, taskPerformance =
   const explanation = `${matchedSkills.length}/${required.length} required skills matched (${weights.skills}% weight); ${relevantEvidence.length} skill-relevant evidence items found (${weights.evidence}%); reviewer rubric performance ${Math.round(performance * 100)}% of available points (${weights.performance}%). Weights are prototype assumptions, not validated predictions.${unverified.length ? ' Some eligibility rules need manual review.' : ''}`;
   return { score, matchedSkills, missingSkills, evidenceIds: relevantEvidence.map((item) => item._id), eligibility: { eligible: status === 'eligible', status, failures, unverified }, explanation, formulaVersion: process.env.MATCH_FORMULA_VERSION || 'v1' };
 }
+
+export function getSkillGapRecommendations(profile, opportunity, tasks = []) {
+  const owned = new Set((profile.skills || []).map(skill => normalize(typeof skill === 'string' ? skill : skill.name)).filter(Boolean));
+  const gaps = [...new Set((opportunity.requiredSkills || []).map(normalize).filter(skill => skill && !owned.has(skill)))];
+  const recommendations = tasks
+    .filter(task => task.status === 'published' && (task.visibility || 'public') === 'public')
+    .map(task => ({ task, skills: [...new Set((task.requiredSkills || []).map(normalize).filter(Boolean))] }))
+    .map(({ task, skills }) => ({ task, matchedGaps: gaps.filter(gap => skills.includes(gap)) }))
+    .filter(({ matchedGaps }) => matchedGaps.length)
+    .sort((a,b) => b.matchedGaps.length-a.matchedGaps.length || a.task.title.localeCompare(b.task.title))
+    .map(({task,matchedGaps})=>({id:task._id,title:task.title,category:task.category,difficulty:task.difficulty,matchedGaps}));
+  return { missingSkills: gaps, recommendations, note: 'Recommendations are practice suggestions based on task skill labels; completing a task does not automatically add or verify a skill.' };
+}

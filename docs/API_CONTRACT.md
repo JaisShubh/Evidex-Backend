@@ -61,6 +61,7 @@ All endpoints are prefixed `/api`; protected routes require a bearer JWT. Succes
 | GET | `/resource-swaps/:id` | Participant | Read a swap visible only to its two parties |
 | POST | `/resource-swaps/:id/respond`, `/confirm`, `/cancel` | Participant | Accept/decline, confirm both-party completion, or cancel an open swap |
 | GET | `/opportunities` | User | Published opportunities |
+| GET | `/opportunities/:id/skill-gaps` | User | Compare required skills against own profile and suggest public practice tasks |
 | GET/POST | `/owner/opportunities` and `/opportunities` | Founder/admin | List owned opportunities or create a draft |
 | PATCH/DELETE | `/opportunities/:id` | Owner/admin | Edit a draft or close an opportunity; admins may publish |
 | GET | `/opportunities/:id/applications` | Owner/admin | List applicant IDs and application status without exposing applicant profiles |

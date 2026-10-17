@@ -6,9 +6,9 @@ import http from 'node:http';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import { app } from '../src/app.js';
-import { Appeal, Evidence } from '../src/models/Work.js';
+import { Appeal, Evidence, Task } from '../src/models/Work.js';
 import { User } from '../src/models/User.js';
-import { Application } from '../src/models/Venture.js';
+import { Application, Opportunity } from '../src/models/Venture.js';
 import { ProfileShare } from '../src/models/Sharing.js';
 
 const enabled = process.env.EVIDEX_INTEGRATION_TESTS === 'true';
@@ -227,6 +227,7 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     });
     assert.equal(taskRevision.status, 200);
     assert.equal(taskRevision.payload.data.version, 3);
+    assert.deepEqual(taskRevision.payload.data.requiredSkills, ['Research']);
     assert.equal((await call('GET', `/api/attempts/${attemptId}/submissions`, { token: reviewerUser.token })).status, 404);
     assert.equal((await call('POST', `/api/attempts/${attemptId}/submissions`, {
       token: student.token, body: { deliverables: [{ name: 'Other', value: 'This does not satisfy the required Summary deliverable.' }] },
@@ -334,6 +335,9 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     assert.equal(generatedBrief.payload.data.brief.status, 'draft');
     assert.equal(generatedBrief.payload.data.brief.draftOrigin, 'sample');
     assert.equal(generatedBrief.payload.data.generation.source, 'sample');
+    const editedGeneratedBrief = await call('PATCH', `/api/briefs/${generatedBrief.payload.data.brief._id}`, { token: founder.token, body: { constraints: 'Avoid personal data.' } });
+    assert.equal(editedGeneratedBrief.status, 200);
+    assert.deepEqual(editedGeneratedBrief.payload.data.requiredSkills, ['Research','Communication']);
     assert.equal((await call('POST', `/api/briefs/${generatedBrief.payload.data.brief._id}/publish`, { token: founder.token })).payload.error.code, 'APPROVAL_REQUIRED');
 
     const briefCreated = await call('POST', '/api/briefs', {
@@ -418,17 +422,26 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
 
     const opportunityCreated = await call('POST', '/api/opportunities', {
       token: founder.token,
-      body: { title: 'Integration opportunity', provider: 'Temporary test provider', description: 'Temporary test record.', requiredSkills: ['Research'], eligibility: [] },
+      body: { title: 'Integration opportunity', provider: 'Temporary test provider', description: 'Temporary test record.', requiredSkills: ['Research','Data Analysis'], eligibility: [] },
     });
     assert.equal(opportunityCreated.status, 201, JSON.stringify(opportunityCreated.payload));
     assert.equal(opportunityCreated.payload.data.status, 'draft');
+    assert.deepEqual(opportunityCreated.payload.data.requiredSkills, ['Research','Data Analysis'], JSON.stringify(opportunityCreated.payload));
     const opportunityId = opportunityCreated.payload.data._id;
     assert.equal((await call('GET', '/api/opportunities', { token: student.token })).payload.data.length, 0);
     assert.equal((await call('PATCH', `/api/opportunities/${opportunityId}`, { token: founder.token, body: { status: 'published' } })).status, 403);
     const publishedOpportunity = await call('PATCH', `/api/opportunities/${opportunityId}`, { token: adminToken, body: { status: 'published' } });
     assert.equal(publishedOpportunity.status, 200, JSON.stringify(publishedOpportunity.payload));
+    assert.deepEqual(Array.from((await Opportunity.findById(opportunityId)).requiredSkills), ['Research','Data Analysis']);
+    assert.deepEqual(Array.from((await User.findById(student.user.id)).profile.skills, skill=>skill.name), ['Research']);
     const founderOpportunities = await call('GET', '/api/owner/opportunities', { token: founder.token });
     assert.equal(founderOpportunities.payload.data.length, 1);
+    const skillGapTask=await Task.create({ title: 'Data analysis practice', goal: 'Practice data analysis.', description: 'A public sample task for skill-gap recommendations.', requiredSkills: ['Data Analysis'], deliverables: [{ name: 'Analysis', required: true }], rubric: [{ criterion: 'Clarity', points: 10, description: 'Clear analysis.' }], status: 'published', visibility: 'public' });
+    const skillGaps = await call('GET', `/api/opportunities/${opportunityId}/skill-gaps`, { token: student.token });
+    assert.equal(skillGaps.status, 200, JSON.stringify(skillGaps.payload));
+    assert.deepEqual(skillGaps.payload.data.missingSkills, ['data analysis'], JSON.stringify(skillGaps.payload));
+    assert.equal(skillGaps.payload.data.recommendations[0].title, 'Data analysis practice');
+    assert.match(skillGaps.payload.data.note, /does not automatically add or verify a skill/);
     const match = await call('POST', '/api/match/calculate', { token: student.token, body: { opportunityId } });
     assert.equal(match.status, 201, JSON.stringify(match.payload));
     assert.ok(Number.isFinite(match.payload.data.score));
@@ -487,6 +500,7 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     const archivedTask = await call('DELETE', `/api/admin/tasks/${taskId}`, { token: adminToken });
     assert.equal(archivedTask.status, 200);
     assert.equal(archivedTask.payload.data.status, 'archived');
+    await Task.findByIdAndUpdate(skillGapTask.id,{status:'archived'});
     assert.equal((await call('GET', '/api/tasks', { token: student.token })).payload.data.length, 0);
   } catch (error) {
     console.error('Integration journey failed:', error);
