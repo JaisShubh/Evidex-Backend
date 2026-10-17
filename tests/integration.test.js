@@ -330,6 +330,12 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     assert.equal(result.status, 201, JSON.stringify(result.payload));
     assert.equal((await call('GET', `/api/ideas/${idea.payload.data._id}/results`, { token: student.token })).payload.data.length, 1);
 
+    const generatedTask=await call('POST','/api/admin/tasks/generate-draft',{token:adminToken,body:{title:'Generated data research task',goal:'Summarize a public trend.',context:'Use public or synthetic data only.',role:'Research'}});
+    assert.equal(generatedTask.status,201,JSON.stringify(generatedTask.payload));
+    assert.equal(generatedTask.payload.data.task.status,'draft');
+    assert.equal(generatedTask.payload.data.task.draftSource,'sample');
+    assert.equal((await call('GET',`/api/tasks/${generatedTask.payload.data.task._id}`,{token:student.token})).status,404);
+
     const generatedBrief = await call('POST', '/api/briefs/generate-draft', { token: founder.token, body: { title: 'Generated test brief', context: 'Create a short research task using synthetic information.' } });
     assert.equal(generatedBrief.status, 201, JSON.stringify(generatedBrief.payload));
     assert.equal(generatedBrief.payload.data.brief.status, 'draft');

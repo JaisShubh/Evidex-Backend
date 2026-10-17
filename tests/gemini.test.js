@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deconstructIdea, draftBusinessBrief } from '../src/services/gemini.service.js';
+import { deconstructIdea, draftBusinessBrief, draftTrialTask } from '../src/services/gemini.service.js';
 
 const idea = { title: 'Sample idea', description: 'A test idea.' };
 
@@ -47,4 +47,23 @@ test('business brief drafting validates provider output and falls back without l
   assert.equal(fallback.source, 'sample');
   assert.equal(fallback.fallbackReason, 'provider_unavailable');
   assert.doesNotMatch(JSON.stringify(fallback), /private provider diagnostic/);
+});
+
+test('trial-task drafting returns a labelled sample without a Gemini key', async () => {
+  const result = await draftTrialTask({ title: 'Data research task', goal: 'Summarize a trend.', context: 'Use public data.' }, { apiKey: '' });
+  assert.equal(result.source, 'sample');
+  assert.equal(result.data.goal, 'Summarize a trend.');
+  assert.equal(result.data.rubric.reduce((sum, item) => sum + item.points, 0), 100);
+});
+
+test('trial-task drafting validates structured model output and sanitizes provider failures', async () => {
+  const valid = { goal: 'Complete the analysis.', description: 'Use the supplied context.', category: 'Research', difficulty: 'Beginner', requiredSkills: ['Research'], deliverables: [{ name: 'Summary', required: true }], rubric: [{ criterion: 'Clarity', points: 10, description: 'Clear response.' }], allowedTools: 'Any tools.' };
+  class GoodGeminiClient { models = { generateContent: async () => ({ text: JSON.stringify(valid) }) }; }
+  const generated = await draftTrialTask({ title: 'Task', goal: 'Analyze a dataset.', context: 'Synthetic data only.' }, { apiKey: 'test-key', clientClass: GoodGeminiClient });
+  assert.equal(generated.source, 'gemini');
+  assert.equal(generated.data.category, 'Research');
+  class FailingGeminiClient { models = { generateContent: async () => { throw new Error('sensitive provider detail'); } }; }
+  const fallback = await draftTrialTask({ title: 'Task', goal: 'Analyze a dataset.', context: 'Synthetic data only.' }, { apiKey: 'test-key', clientClass: FailingGeminiClient });
+  assert.equal(fallback.source, 'sample');
+  assert.doesNotMatch(JSON.stringify(fallback), /sensitive provider detail/);
 });

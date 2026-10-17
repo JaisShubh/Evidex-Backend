@@ -21,6 +21,7 @@ All endpoints are prefixed `/api`; protected routes require a bearer JWT. Succes
 | GET/POST/PATCH/DELETE | `/evidence/me`, `/evidence`, `/evidence/:id` | Owner | List/create/update/archive own evidence; task-submission evidence is system-managed |
 | GET | `/tasks`, `/tasks/:id` | User | List/read published tasks |
 | GET/POST/PATCH/DELETE | `/admin/tasks`, `/admin/tasks/:id` | Admin | Manage drafts, publish/version tasks, or archive them |
+| POST | `/admin/tasks/generate-draft` | Admin | Generate a structured Gemini-assisted task draft (10 requests/hour); sample fallback is labelled; task remains unpublished |
 | POST | `/tasks/:id/attempts` | User | Start versioned attempt |
 | POST | `/attempts/:id/submissions` | Owner | Create first submission or versioned resubmission after changes are requested |
 | GET | `/submissions/me`, `/attempts/:id/submissions` | Owner | Reload submission and attempt history |

@@ -13,7 +13,7 @@ import { ProfileShare } from './models/Sharing.js';
 import { Brief, Invitation, ResourceSwap, Team, TeamInvitation } from './models/Collaboration.js';
 import { RepositoryCheck } from './models/RepositoryCheck.js';
 import { requireAuth, requireRole } from './middleware/auth.js';
-import { deconstructIdea, draftBusinessBrief } from './services/gemini.service.js';
+import { deconstructIdea, draftBusinessBrief, draftTrialTask } from './services/gemini.service.js';
 import { calculateMatch, getSkillGapRecommendations } from './services/matching.service.js';
 import { buildDashboardSummary } from './services/dashboard.service.js';
 import { canSubmitAttempt } from './services/submission.service.js';
@@ -201,6 +201,12 @@ app.delete('/api/evidence/:id',asyncRoute(async(req,res)=>{
 }));
 const taskSchema=z.object({title:text(120).min(1),goal:text(500).min(1),description:text(5000).min(1),category:text(80).min(1).optional(),difficulty:z.enum(['Beginner','Intermediate','Advanced']).optional(),requiredSkills:z.array(text(60).min(1)).max(30).default([]),deliverables:z.array(z.object({name:text(120).min(1),required:z.boolean().default(true)}).strict()).min(1).max(30),rubric:z.array(z.object({criterion:text(120).min(1),points:z.number().positive(),description:text(1000).min(1)}).strict()).min(1).max(30),allowedTools:text(500).optional(),status:z.enum(['draft','published']).optional()}).strict();
 const taskPatchSchema=taskSchema.partial().extend({requiredSkills:z.array(text(60).min(1)).max(30).optional(),status:z.enum(['draft','published']).optional()}).strict().refine(value=>Object.keys(value).length>0);
+app.post('/api/admin/tasks/generate-draft',requireRole('admin'),aiLimiter,asyncRoute(async(req,res)=>{
+  const input=z.object({title:text(120).min(1),goal:text(500).min(1),context:text(4000).min(1),role:text(80).optional()}).strict().parse(req.body);
+  const generated=await draftTrialTask(input);
+  const task=await Task.create({title:input.title,...generated.data,status:'draft',draftSource:generated.source,promptVersion:generated.promptVersion,version:1});
+  ok(res,{task,generation:{source:generated.source,model:generated.model,promptVersion:generated.promptVersion,fallbackReason:generated.fallbackReason||null,notice:generated.source==='sample'?'Sample task draft — not generated live. Review and edit before publishing.':'AI-generated task proposal — review and edit before publishing.'}},201);
+}));
 app.get('/api/admin/tasks',requireRole('admin'),asyncRoute(async(_req,res)=>ok(res,await Task.find({}).sort({updatedAt:-1}))));
 app.post('/api/admin/tasks',requireRole('admin'),asyncRoute(async(req,res)=>{const fields=taskSchema.parse(req.body);const task=await Task.create({...fields,category:fields.category||'General',allowedTools:fields.allowedTools||'Any tools; disclose AI assistance.',version:1,status:fields.status||'draft'});ok(res,task,201);}));
 app.patch('/api/admin/tasks/:id',requireRole('admin'),asyncRoute(async(req,res)=>{
