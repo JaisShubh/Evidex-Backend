@@ -55,6 +55,17 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
       return { status: response.status, payload };
     };
 
+    const frontendHealth = await httpFetch(`${baseUrl}/api/health`, { headers: { Origin: 'http://localhost:5173' } });
+    assert.equal(frontendHealth.status, 200);
+    assert.equal(frontendHealth.headers.get('access-control-allow-origin'), 'http://localhost:5173');
+    assert.deepEqual(await frontendHealth.json(), { data: { status: 'ok', database: 'connected' } });
+    const frontendPreflight = await httpFetch(`${baseUrl}/api/auth/login`, {
+      method: 'OPTIONS',
+      headers: { Origin: 'http://localhost:5173', 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type,authorization' },
+    });
+    assert.equal(frontendPreflight.status, 204);
+    assert.equal(frontendPreflight.headers.get('access-control-allow-origin'), 'http://localhost:5173');
+
     const register = async (label, role = 'student') => {
       const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
       const email = `${slug}-${crypto.randomUUID()}@example.com`;
@@ -253,6 +264,30 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     assert.match(verification.payload.data.warnings[0], /correctness.*not checked/);
     assert.equal((await call('GET', `/api/submissions/${submissionId}/verification`, { token: reviewerUser.token })).status, 200);
     assert.equal((await call('GET', `/api/submissions/${submissionId}/verification`, { token: reviewerToken })).status, 200);
+
+    const previousScoringGeminiKey = process.env.GEMINI_API_KEY;
+    process.env.GEMINI_API_KEY = '';
+    try {
+      assert.equal((await call('POST', `/api/submissions/${submissionId}/score-suggestions`, { token: reviewerToken, body: {} })).status, 400);
+      assert.equal((await call('POST', `/api/submissions/${submissionId}/score-suggestions`, { token: student.token, body: { confirmShareWithGemini: true } })).status, 403);
+      const scoreSuggestion = await call('POST', `/api/submissions/${submissionId}/score-suggestions`, {
+        token: reviewerToken, body: { confirmShareWithGemini: true },
+      });
+      assert.equal(scoreSuggestion.status, 201, JSON.stringify(scoreSuggestion.payload));
+      assert.equal(scoreSuggestion.payload.data.suggestion.source, 'sample');
+      assert.deepEqual(scoreSuggestion.payload.data.suggestion.scores, []);
+      assert.equal(scoreSuggestion.payload.data.changesSubmissionStatus, false);
+      assert.equal(scoreSuggestion.payload.data.requiresHumanReview, true);
+      const suggestions = await call('GET', `/api/submissions/${submissionId}/score-suggestions`, { token: reviewerToken });
+      assert.equal(suggestions.status, 200);
+      assert.equal(suggestions.payload.data.length, 1);
+      assert.equal((await call('GET', `/api/submissions/${submissionId}/score-suggestions`, { token: student.token })).status, 403);
+      const unchangedSubmission = await call('GET', `/api/attempts/${attemptId}/submissions`, { token: student.token });
+      assert.equal(unchangedSubmission.payload.data[0].status, 'checks_passed');
+    } finally {
+      if (previousScoringGeminiKey === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = previousScoringGeminiKey;
+    }
 
     const review = await call('POST', `/api/submissions/${submissionId}/reviews`, {
       token: reviewerToken,

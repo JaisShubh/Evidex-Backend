@@ -28,6 +28,8 @@ All endpoints are prefixed `/api`; protected routes require a bearer JWT. Succes
 | GET | `/submissions/:id/verification` | Owner/reviewer | Read persisted verification and review history |
 | POST | `/submissions/:id/verify` | Owner | Save a completeness check |
 | GET | `/reviews/queue` | Reviewer/admin | List submissions awaiting human review |
+| POST | `/submissions/:id/score-suggestions` | Reviewer/admin | Request a stored advisory rubric suggestion; body must include `{"confirmShareWithGemini":true}` before submission content may be sent to Gemini; never changes submission status |
+| GET | `/submissions/:id/score-suggestions` | Reviewer/admin | Read stored AI/sample suggestions for a submission |
 | GET | `/submissions/:id/reviews` | Owner/reviewer | Read permitted review history |
 | POST | `/submissions/:id/reviews` | Reviewer/admin | Persist rubric-bound human review |
 | POST | `/submissions/:id/appeals` | Owner | Appeal a rejected submission once |

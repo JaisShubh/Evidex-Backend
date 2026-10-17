@@ -12,12 +12,14 @@ import { Idea, IdeaAnalysis, IdeaResearch, Experiment, ExperimentResult, Opportu
 import { ProfileShare } from './models/Sharing.js';
 import { Brief, Invitation, ResourceSwap, Team, TeamInvitation } from './models/Collaboration.js';
 import { RepositoryCheck } from './models/RepositoryCheck.js';
+import { ReviewSuggestion } from './models/ReviewSuggestion.js';
 import { requireAuth, requireRole } from './middleware/auth.js';
 import { deconstructIdea, draftBusinessBrief, draftTrialTask } from './services/gemini.service.js';
 import { calculateMatch, getSkillGapRecommendations } from './services/matching.service.js';
 import { buildDashboardSummary } from './services/dashboard.service.js';
 import { canSubmitAttempt } from './services/submission.service.js';
 import { fetchPublicGithubMetadata } from './services/github.service.js';
+import { suggestRubricScores } from './services/review-assist.service.js';
 
 export const app = express();
 app.disable('x-powered-by'); app.use(helmet()); app.use(cors({ origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173' })); app.use(express.json({ limit: '128kb' }));
@@ -263,6 +265,25 @@ app.post('/api/submissions/:id/verify',asyncRoute(async(req,res)=>{
   ok(res,{submission:sub,verification:run,checks,warnings});
 }));
 app.get('/api/reviews/queue',requireRole('reviewer','admin'),asyncRoute(async(_req,res)=>ok(res,await Submission.find({isSample:{$ne:true},status:{$in:['submitted','checks_passed','needs_review']}}).sort({submittedAt:1}).limit(100).populate({path:'attemptId',populate:{path:'taskId',select:'title category difficulty rubric'}}))));
+app.post('/api/submissions/:id/score-suggestions',requireRole('reviewer','admin'),aiLimiter,asyncRoute(async(req,res)=>{
+  z.object({confirmShareWithGemini:z.literal(true)}).strict().parse(req.body);
+  const sub=await Submission.findById(req.params.id);
+  if(!sub||sub.isSample)return res.status(404).json({error:{code:'NOT_FOUND',message:'Reviewable submission not found.'}});
+  if(String(sub.userId)===req.user.id)return res.status(403).json({error:{code:'FORBIDDEN',message:'You cannot request review assistance for your own submission.'}});
+  if(!['submitted','checks_passed','needs_review'].includes(sub.status))return res.status(409).json({error:{code:'INVALID_STATUS',message:'This submission is not awaiting review.'}});
+  const attempt=await Attempt.findOne({_id:sub.attemptId,userId:sub.userId});
+  const currentTask=attempt?await Task.findById(attempt.taskId):null;
+  const task=attempt?.taskSnapshot||currentTask;
+  if(!task?.rubric?.length)return res.status(404).json({error:{code:'NOT_FOUND',message:'Task rubric not found.'}});
+  const suggestion=await suggestRubricScores(task,sub);
+  const notice=suggestion.source==='gemini'?'AI suggestions are advisory. Verify each rationale and set the final human review yourself.':'Sample notice — Gemini was unavailable; no scores were generated.';
+  const saved=await ReviewSuggestion.create({submissionId:sub.id,reviewerId:req.user.id,...suggestion,notice});
+  ok(res,{suggestion:saved,changesSubmissionStatus:false,requiresHumanReview:true},201);
+}));
+app.get('/api/submissions/:id/score-suggestions',requireRole('reviewer','admin'),asyncRoute(async(req,res)=>{
+  if(!await Submission.exists({_id:req.params.id,isSample:{$ne:true}}))return res.status(404).json({error:{code:'NOT_FOUND',message:'Submission not found.'}});
+  ok(res,await ReviewSuggestion.find({submissionId:req.params.id}).sort({createdAt:-1}));
+}));
 app.get('/api/submissions/:id/reviews',asyncRoute(async(req,res)=>{const sub=await Submission.findById(req.params.id);if(!sub)return res.status(404).json({error:{code:'NOT_FOUND',message:'Submission not found.'}});if(String(sub.userId)!==req.user.id&&!['reviewer','admin'].includes(req.user.role))return res.status(404).json({error:{code:'NOT_FOUND',message:'Submission not found.'}});ok(res,await Review.find({submissionId:sub.id}).sort({createdAt:1}));}));
 app.post('/api/submissions/:id/reviews',requireRole('reviewer','admin'),asyncRoute(async(req,res)=>{const sub=await Submission.findById(req.params.id);if(!sub)return res.status(404).json({error:{code:'NOT_FOUND',message:'Submission not found.'}});if(sub.isSample)return res.status(409).json({error:{code:'SAMPLE_RECORD',message:'Sample submissions cannot be reviewed.'}});if(String(sub.userId)===req.user.id)return res.status(403).json({error:{code:'FORBIDDEN',message:'You cannot review your own submission.'}});if(!['submitted','checks_passed','needs_review'].includes(sub.status))return res.status(409).json({error:{code:'INVALID_STATUS',message:'This submission is not awaiting review.'}});const attempt=await Attempt.findOne({_id:sub.attemptId,userId:sub.userId});const currentTask=attempt?await Task.findById(attempt.taskId):null;const task=attempt?.taskSnapshot||currentTask;if(!task)return res.status(404).json({error:{code:'NOT_FOUND',message:'Task rubric not found.'}});const scoreSchema=z.object({criterion:text(120),score:z.number().min(0),maxScore:z.number().positive()}).refine(s=>s.score<=s.maxScore,{message:'Score cannot exceed the maximum.'});const input=z.object({rubricScores:z.array(scoreSchema).min(1).max(30),feedback:text(3000).min(1),decision:z.enum(['verified','changes_requested','rejected'])}).parse(req.body);const rubric=task.rubric||[];const invalid=input.rubricScores.length!==rubric.length||new Set(input.rubricScores.map(score=>score.criterion)).size!==rubric.length||input.rubricScores.some(score=>{const criterion=rubric.find(item=>item.criterion===score.criterion);return !criterion||Number(criterion.points)!==score.maxScore;});if(invalid)return res.status(400).json({error:{code:'INVALID_RUBRIC',message:'Provide one score for every task rubric criterion using its configured maximum.'}});const review=await Review.create({...input,submissionId:sub.id,reviewerId:req.user.id});sub.status=input.decision;await sub.save();await Evidence.updateMany({relatedSubmissionId:sub.id},{$set:{status:input.decision,provenance:'reviewed'}});await Attempt.findByIdAndUpdate(sub.attemptId,{status:input.decision});ok(res,review,201);}));
 app.get('/api/appeals/me',asyncRoute(async(req,res)=>ok(res,await Appeal.find({userId:req.user.id}).sort({createdAt:-1}).populate('submissionId','status submittedAt'))));
