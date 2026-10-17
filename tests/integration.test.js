@@ -39,9 +39,10 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
       server.listen(0, '127.0.0.1', resolve);
     });
     const baseUrl = `http://127.0.0.1:${server.address().port}`;
+    const httpFetch = globalThis.fetch;
 
     const call = async (method, path, { token, body, headers: extraHeaders = {} } = {}) => {
-      const response = await fetch(`${baseUrl}${path}`, {
+      const response = await httpFetch(`${baseUrl}${path}`, {
         method,
         headers: {
           ...extraHeaders,
@@ -118,7 +119,7 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
 
     const project = await call('POST', '/api/projects', {
       token: student.token,
-      body: { title: 'Integration project', description: 'A temporary test project.', skills: ['Research'] },
+      body: { title: 'Integration project', description: 'A temporary test project.', repositoryUrl: 'https://github.com/evidex-test/example-project', skills: ['Research'] },
     });
     assert.equal(project.status, 201, JSON.stringify(project.payload));
     const projectUpdate = await call('PATCH', `/api/projects/${project.payload.data._id}`, {
@@ -126,6 +127,23 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     });
     assert.equal(projectUpdate.status, 200);
     assert.equal(projectUpdate.payload.data.contribution, 'Integration test contribution.');
+    assert.equal((await call('POST', `/api/projects/${project.payload.data._id}/repository-checks`, { token: reviewerUser.token })).status, 404);
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = async (url, options) => {
+      assert.equal(url, 'https://api.github.com/repos/evidex-test/example-project');
+      assert.equal(options.headers['User-Agent'], 'EVIDEX-backend');
+      return new Response(JSON.stringify({ full_name: 'evidex-test/example-project', private: false, description: 'Temporary public repository.', default_branch: 'main', pushed_at: '2026-10-01T00:00:00Z', archived: false, stargazers_count: 3 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+    try {
+      const repositoryCheck = await call('POST', `/api/projects/${project.payload.data._id}/repository-checks`, { token: student.token });
+      assert.equal(repositoryCheck.status, 201, JSON.stringify(repositoryCheck.payload));
+      assert.equal(repositoryCheck.payload.data.check.providerStatus, 'public');
+      assert.equal(repositoryCheck.payload.data.check.fullName, 'evidex-test/example-project');
+      assert.match(repositoryCheck.payload.data.meaning, /does not verify ownership/);
+      assert.equal((await call('GET', `/api/projects/${project.payload.data._id}/repository-checks`, { token: student.token })).payload.data.length, 1);
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
     assert.equal((await call('PATCH', `/api/projects/${project.payload.data._id}`, { token: reviewerUser.token, body: { title: 'Unauthorized edit' } })).status, 404);
     const evidence = await call('POST', '/api/evidence', {
       token: student.token,

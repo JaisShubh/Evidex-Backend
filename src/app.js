@@ -11,11 +11,13 @@ import { Project, Evidence, Task, Attempt, Submission, VerificationRun, Review, 
 import { Idea, IdeaAnalysis, IdeaResearch, Experiment, ExperimentResult, Opportunity, MatchResult, Application } from './models/Venture.js';
 import { ProfileShare } from './models/Sharing.js';
 import { Brief, Invitation, ResourceSwap } from './models/Collaboration.js';
+import { RepositoryCheck } from './models/RepositoryCheck.js';
 import { requireAuth, requireRole } from './middleware/auth.js';
 import { deconstructIdea } from './services/gemini.service.js';
 import { calculateMatch } from './services/matching.service.js';
 import { buildDashboardSummary } from './services/dashboard.service.js';
 import { canSubmitAttempt } from './services/submission.service.js';
+import { fetchPublicGithubMetadata } from './services/github.service.js';
 
 export const app = express();
 app.disable('x-powered-by'); app.use(helmet()); app.use(cors({ origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173' })); app.use(express.json({ limit: '128kb' }));
@@ -23,6 +25,7 @@ app.use('/api', (req, res, next) => { res.setHeader('Cache-Control','no-store');
 const limited = (_req, res) => res.status(429).json({ error: { code: 'RATE_LIMITED', message: 'Too many requests. Please try again later.' } });
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: 'draft-8', legacyHeaders: false, handler: limited });
 const aiLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false, handler: limited });
+const githubCheckLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 20, standardHeaders: 'draft-8', legacyHeaders: false, handler: limited });
 const ok = (res, data, status=200) => res.status(status).json({ data });
 const cleanUser = (u) => ({ id: u._id, name: u.name, email: u.email, role: u.role, status: u.status, profile: u.profile });
 const asyncRoute = (fn) => (req,res,next) => Promise.resolve(fn(req,res,next)).catch(next);
@@ -145,6 +148,18 @@ app.patch('/api/projects/:id',asyncRoute(async(req,res)=>{
   Object.assign(project,fields);
   await project.save();
   ok(res,project);
+}));
+app.get('/api/projects/:id/repository-checks',asyncRoute(async(req,res)=>{
+  if(!await Project.exists({_id:req.params.id,userId:req.user.id,archivedAt:null}))return res.status(404).json({error:{code:'NOT_FOUND',message:'Project not found.'}});
+  ok(res,await RepositoryCheck.find({projectId:req.params.id,userId:req.user.id}).sort({checkedAt:-1}).limit(20));
+}));
+app.post('/api/projects/:id/repository-checks',githubCheckLimiter,asyncRoute(async(req,res)=>{
+  const project=await Project.findOne({_id:req.params.id,userId:req.user.id,archivedAt:null});
+  if(!project)return res.status(404).json({error:{code:'NOT_FOUND',message:'Project not found.'}});
+  if(!project.repositoryUrl)return res.status(400).json({error:{code:'REPOSITORY_URL_REQUIRED',message:'Add a GitHub repository URL to this project first.'}});
+  const metadata=await fetchPublicGithubMetadata(project.repositoryUrl);
+  const check=await RepositoryCheck.create({userId:req.user.id,projectId:project.id,...metadata});
+  ok(res,{check,meaning:'Confirms only that GitHub returned public repository metadata. It does not verify ownership, authorship, commit history, code quality, or project claims.'},201);
 }));
 app.delete('/api/projects/:id',asyncRoute(async(req,res)=>{
   const project=await Project.findOne({_id:req.params.id,userId:req.user.id,archivedAt:null});
@@ -480,4 +495,4 @@ app.post('/api/applications/:id/withdraw',asyncRoute(async(req,res)=>{
   ok(res,application);
 }));
 app.use('/api',(_req,res)=>res.status(404).json({error:{code:'NOT_FOUND',message:'API route not found.'}}));
-app.use((err,req,res,_next)=>{if(err?.type==='entity.parse.failed')return res.status(400).json({error:{code:'INVALID_JSON',message:'Request body must contain valid JSON.'}});if(err?.type==='entity.too.large')return res.status(413).json({error:{code:'PAYLOAD_TOO_LARGE',message:'Request body is too large.'}});if(err instanceof z.ZodError)return res.status(400).json({error:{code:'VALIDATION_ERROR',message:'Please check the submitted fields.',details:err.issues.map(i=>({path:i.path.join('.'),message:i.message}))}});if(err?.code===11000)return res.status(409).json({error:{code:'CONFLICT',message:'This record already exists.'}});if(err?.name==='CastError')return res.status(400).json({error:{code:'INVALID_ID',message:'Record ID is invalid.'}});console.error('API error',err?.message);res.status(500).json({error:{code:'INTERNAL_ERROR',message:'Something went wrong. Please try again.'}});});
+app.use((err,req,res,_next)=>{if(err?.type==='entity.parse.failed')return res.status(400).json({error:{code:'INVALID_JSON',message:'Request body must contain valid JSON.'}});if(err?.type==='entity.too.large')return res.status(413).json({error:{code:'PAYLOAD_TOO_LARGE',message:'Request body is too large.'}});if(err instanceof z.ZodError)return res.status(400).json({error:{code:'VALIDATION_ERROR',message:'Please check the submitted fields.',details:err.issues.map(i=>({path:i.path.join('.'),message:i.message}))}});if(err?.code===11000)return res.status(409).json({error:{code:'CONFLICT',message:'This record already exists.'}});if(err?.name==='CastError')return res.status(400).json({error:{code:'INVALID_ID',message:'Record ID is invalid.'}});if(Number.isInteger(err?.status)&&err?.code)return res.status(err.status).json({error:{code:err.code,message:err.message}});console.error('API error',err?.message);res.status(500).json({error:{code:'INTERNAL_ERROR',message:'Something went wrong. Please try again.'}});});

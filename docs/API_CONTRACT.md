@@ -17,6 +17,7 @@ All endpoints are prefixed `/api`; protected routes require a bearer JWT. Succes
 | GET | `/admin/users/:id/access-history` | Admin | Read account role/status change history |
 | GET | `/dashboard` | User | Actual evidence, task, review, activity, idea and latest-match summary |
 | GET/POST/PATCH/DELETE | `/projects/me`, `/projects`, `/projects/:id` | Owner | List/create/update/archive own projects |
+| GET/POST | `/projects/:id/repository-checks` | Project owner | Check/read a history of public GitHub repository metadata; bounded to GitHub URLs and rate limited |
 | GET/POST/PATCH/DELETE | `/evidence/me`, `/evidence`, `/evidence/:id` | Owner | List/create/update/archive own evidence; task-submission evidence is system-managed |
 | GET | `/tasks`, `/tasks/:id` | User | List/read published tasks |
 | GET/POST/PATCH/DELETE | `/admin/tasks`, `/admin/tasks/:id` | Admin | Manage drafts, publish/version tasks, or archive them |
@@ -76,3 +77,5 @@ Idea analyses save model, schema and prompt versions. If Gemini is missing or fa
 Business briefs can be converted to private invite-only tasks. Only active account holders can be invited; candidates must accept before reading the brief or task, and acceptance records consent. AI-sourced briefs require admin approval, but AI brief generation is not yet implemented. Resource swaps are bilateral records with participant-only access and require both participants to confirm completion. The API records agreement and confirmations; it does not enforce delivery, assess disputes, or process payment.
 
 Project and user-reported evidence `DELETE` operations archive records with a timestamp; they do not permanently erase their history. Archived records disappear from normal lists, dashboard counts, matching, and new shares. Editing user-reported evidence resets its provenance/status to `user_reported`/`submitted`. Evidence tied to a task submission cannot be edited or archived.
+
+Repository checks only request metadata from GitHub's fixed API host for canonical HTTPS `github.com/{owner}/{repo}` URLs. A public result confirms that GitHub returned public repository metadata at the recorded time. A 404 is ambiguous between missing and private repositories. Neither outcome proves that the user owns the repository, wrote its code, or completed the listed work. Private repository OAuth, commit analysis, source retrieval, and similarity checks are not implemented.

@@ -35,12 +35,12 @@ Public registration only allows `student` and `founder` roles. To provision a re
 
 ## Verification
 
-See [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md). `npm test` runs 17 unit/schema/service tests; `npm run test:integration` runs a MongoDB-backed API journey when `MONGODB_URI` and `JWT_SECRET` are configured in `.env`. The integration test uses a fresh random `evidex_it_*` database and drops it after the run. The persisted API journey and Atlas connection passed. Live Gemini requests and browser E2E checks remain unverified; they need provider credentials and a running UI/API environment.
+See [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md). `npm test` runs 21 unit/schema/service tests; `npm run test:integration` runs a MongoDB-backed API journey when `MONGODB_URI` and `JWT_SECRET` are configured in `.env`. The integration test uses a fresh random `evidex_it_*` database and drops it after the run. The persisted API journey and Atlas connection passed. Live Gemini requests and browser E2E checks remain unverified; they need provider credentials and a running UI/API environment.
 
 ## Limitations and planned scope
 
 - A public profile directory/search is not exposed. A user can create an expiring share link with selected fields, projects and evidence; the raw link token is shown once and revocation is server-enforced.
-- Verification checks every task-required deliverable for a non-empty submitted value and clearly reports its limits. No sandbox execution, source URL accessibility, Git metadata integration, similarity service, or authorship determination is implemented.
+- Verification checks every task-required deliverable for a non-empty submitted value and clearly reports its limits. Public GitHub repository metadata can be checked, but the API does not verify repository ownership, commit authorship/history, code quality, or claims. No sandbox execution, arbitrary source URL accessibility check, similarity service, or authorship determination is implemented.
 - Reviewer/admin/mentor accounts cannot be created through public signup. Provision them with the documented local role command. The restricted talent board only shows active student accounts that explicitly opted in; reviewer invitations remain unimplemented.
 - Scoped business briefs, private invite-only brief tasks, candidate invitation/acceptance, and two-party resource swaps are implemented as API workflows. AI-drafted briefs require an admin approval before publication; AI brief drafting itself is not yet wired to a provider.
 - No file uploads, resume parsing, voice input, location discovery, automated team formation, payments, or proctoring.
