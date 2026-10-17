@@ -11,6 +11,7 @@ import { Idea, IdeaAnalysis, Experiment, ExperimentResult, Opportunity, MatchRes
 import { requireAuth, requireRole } from './middleware/auth.js';
 import { deconstructIdea } from './services/gemini.service.js';
 import { calculateMatch } from './services/matching.service.js';
+import { buildDashboardSummary } from './services/dashboard.service.js';
 
 export const app = express();
 app.disable('x-powered-by'); app.use(helmet()); app.use(cors({ origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173' })); app.use(express.json({ limit: '128kb' }));
@@ -27,6 +28,34 @@ app.get('/api/health', asyncRoute(async (_req,res) => { const database=(await im
 app.post('/api/auth/register', authLimiter, asyncRoute(async (req,res) => { const input=registerSchema.parse(req.body); const email=input.email.toLowerCase(); if(await User.exists({email})) return res.status(409).json({error:{code:'EMAIL_EXISTS',message:'An account with this email already exists.'}}); const user=await User.create({name:input.name,email,passwordHash:await bcrypt.hash(input.password,12),role:input.role||'student',profile:{displayName:input.name}}); const token=jwt.sign({id:user.id,role:user.role},process.env.JWT_SECRET,{expiresIn:'7d'}); return ok(res,{user:cleanUser(user),token},201); }));
 app.post('/api/auth/login', authLimiter, asyncRoute(async (req,res) => { const email=z.string().email().parse(req.body?.email).toLowerCase(); const password=z.string().min(1).max(100).parse(req.body?.password); const user=await User.findOne({email}); if(!user||!(await bcrypt.compare(password,user.passwordHash))) return res.status(401).json({error:{code:'INVALID_CREDENTIALS',message:'Email or password is incorrect.'}}); return ok(res,{user:cleanUser(user),token:jwt.sign({id:user.id,role:user.role},process.env.JWT_SECRET,{expiresIn:'7d'})}); }));
 app.use('/api', requireAuth);
+app.get('/api/dashboard',asyncRoute(async(req,res)=>{
+  const userId=req.user.id;
+  const [evidenceCount,completedTaskCount,pendingReviewCount,changesRequestedCount,activeAttempt,plannedExperiment,latestMatch,ideas,submissions,projects,results,recentEvidence]=await Promise.all([
+    Evidence.countDocuments({userId,provenance:{$ne:'sample'}}),
+    Attempt.countDocuments({userId,isSample:{$ne:true},status:'verified'}),
+    Submission.countDocuments({userId,isSample:{$ne:true},status:{$in:['submitted','checks_passed','needs_review']}}),
+    Submission.countDocuments({userId,isSample:{$ne:true},status:'changes_requested'}),
+    Attempt.findOne({userId,isSample:{$ne:true},status:'in_progress'}).sort({startedAt:1}).populate({path:'taskId',select:'title'}),
+    Experiment.findOne({userId,status:'planned'}).sort({createdAt:1}).select('_id hypothesis'),
+    MatchResult.findOne({userId}).sort({calculatedAt:-1}).populate({path:'opportunityId',select:'title provider roleType'}),
+    Idea.find({userId}).sort({updatedAt:-1}).limit(3).select('title status updatedAt'),
+    Submission.find({userId,isSample:{$ne:true}}).sort({submittedAt:-1}).limit(8).select('_id status submittedAt'),
+    Project.find({userId}).sort({updatedAt:-1}).limit(5).select('_id title updatedAt'),
+    ExperimentResult.find({userId}).sort({createdAt:-1}).limit(5).select('_id observations createdAt'),
+    Evidence.find({userId,provenance:{$ne:'sample'}}).sort({createdAt:-1}).limit(5).select('_id title status createdAt'),
+  ]);
+  const submissionIds=submissions.map((item)=>item._id);
+  const reviews=submissionIds.length?await Review.find({submissionId:{$in:submissionIds}}).sort({createdAt:-1}).limit(8).select('submissionId decision createdAt'):[];
+  const submissionActivity=submissions.map((item)=>({type:'submission',id:item.id,title:'Task submission',status:item.status,date:item.submittedAt}));
+  const reviewActivity=reviews.map((item)=>({type:'review',id:item.id,relatedSubmissionId:item.submissionId,title:'Submission review',status:item.decision,date:item.createdAt}));
+  const projectActivity=projects.map((item)=>({type:'project',id:item.id,title:item.title,status:'updated',date:item.updatedAt}));
+  const resultActivity=results.map((item)=>({type:'experiment_result',id:item.id,title:'Experiment result recorded',status:'recorded',date:item.createdAt}));
+  const evidenceActivity=recentEvidence.map((item)=>({type:'evidence',id:item.id,title:item.title,status:item.status,date:item.createdAt}));
+  const active=activeAttempt?{id:activeAttempt.id,taskTitle:activeAttempt.taskId?.title||'your active task'}:null;
+  const nextExperiment=plannedExperiment?{id:plannedExperiment.id}:null;
+  const opportunityMatchPreview=latestMatch?{score:latestMatch.score,eligibility:latestMatch.eligibility,explanation:latestMatch.explanation,calculatedAt:latestMatch.calculatedAt,opportunity:latestMatch.opportunityId}:null;
+  return ok(res,buildDashboardSummary({evidenceCount,completedTaskCount,pendingReviewCount,changesRequestedCount,activeAttempt:active,plannedExperiment:nextExperiment,latestMatch:opportunityMatchPreview,ideas,recentActivity:[...submissionActivity,...reviewActivity,...projectActivity,...resultActivity,...evidenceActivity]}));
+}));
 app.get('/api/profile/me',asyncRoute(async(req,res)=>{const u=await User.findById(req.user.id); if(!u)return res.status(404).json({error:{code:'NOT_FOUND',message:'User not found.'}}); ok(res,cleanUser(u));}));
 app.patch('/api/profile/me',asyncRoute(async(req,res)=>{const schema=z.object({bio:text(800).optional(),interests:z.array(text(60)).max(20).optional(),preferredRole:text(100).optional(),location:text(100).optional(),visibility:z.enum(['private','public']).optional(),skills:z.array(z.object({name:text(60).min(1),proficiency:z.enum(['beginner','intermediate','advanced']).default('beginner'),evidenceIds:z.array(z.string().regex(/^[a-f\d]{24}$/i)).max(100).optional()})).max(40).optional()}).strict(); const fields=schema.parse(req.body);const linkedIds=[...new Set((fields.skills||[]).flatMap(skill=>skill.evidenceIds||[]))];if(linkedIds.length&&await Evidence.countDocuments({_id:{$in:linkedIds},userId:req.user.id})!==linkedIds.length)return res.status(404).json({error:{code:'NOT_FOUND',message:'One or more evidence records were not found.'}}); const u=await User.findByIdAndUpdate(req.user.id,{$set:Object.fromEntries(Object.entries(fields).map(([k,v])=>[`profile.${k}`,v]))},{new:true,runValidators:true}); ok(res,cleanUser(u));}));
 app.get('/api/projects/me',asyncRoute(async(req,res)=>ok(res,await Project.find({userId:req.user.id}).sort({updatedAt:-1}))));

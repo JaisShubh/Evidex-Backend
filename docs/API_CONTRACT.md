@@ -7,6 +7,7 @@ All endpoints are prefixed `/api`; protected routes require a bearer JWT. Succes
 | GET | `/health` | Public | API and database status |
 | POST | `/auth/register`, `/auth/login` | Public | Account creation/sign-in |
 | GET/PATCH | `/profile/me` | User | Read/update own profile |
+| GET | `/dashboard` | User | Actual evidence, task, review, activity, idea and latest-match summary |
 | GET/POST | `/projects/me`, `/projects` | Owner | List/create own projects |
 | GET/POST | `/evidence/me`, `/evidence` | Owner | List/create own evidence records |
 | GET | `/tasks`, `/tasks/:id` | User | List/read published tasks |

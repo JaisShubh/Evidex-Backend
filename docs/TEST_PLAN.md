@@ -2,16 +2,16 @@
 
 ## Automated checks run
 
-- `npm test` — 11 matching/model tests passed: scoring, configurable weights, unknown eligibility handling, excluded evidence statuses, and Mongoose ownership/status schemas.
+- `npm test` — 14 dashboard/matching/model tests passed: persisted-summary derivation, activity ordering, scoring, configurable weights, unknown eligibility handling, excluded evidence statuses, and Mongoose ownership/status schemas.
 - `npm run build` in Frontend — production build passed.
 - `node --check` across backend JavaScript modules and a dynamic import of the Express app — passed.
+- MongoDB Atlas connection and `ping` using the configured Backend environment — passed.
 - Gemini fallback exercise without `GEMINI_API_KEY` — sample source label and Zod validation passed.
-- API app route modules imported cleanly; a live HTTP health request was blocked because the sandbox denied loopback connections.
+- API app route modules imported cleanly. A full persisted HTTP workflow was not exercised as part of this run.
 
 ## Blocked in this environment
 
-- MongoDB is not listening on `127.0.0.1:27017`, and no project `.env` is configured. Persistent API and browser journeys cannot be exercised until `MONGODB_URI` is set and the database is reachable.
-- The local sandbox denies binding or connecting to a loopback HTTP socket, so an isolated health-route request could not run here.
+- The configured Atlas database is reachable, but full persisted API journeys and browser-based database flows remain unverified.
 - Live Gemini request and browser-based end-to-end checks remain unverified. Configure a key and run both services on a machine that permits local networking.
 - `npm audit` could not reach the npm audit endpoint because network name resolution is unavailable. `npm install` reported 3 high-severity findings in Backend and 2 moderate in Frontend; resolve/review them with an online `npm audit` before deployment.
 

@@ -20,6 +20,7 @@ API: `http://localhost:4000`; UI: `http://localhost:5173`. `CLIENT_ORIGIN` and `
 - Idea Lab with Gemini structured JSON output, Zod validation, saved analysis metadata, rate limiting, explicitly labelled sample output, experiment plans, and separately stored actual results with optional founder-entered outcome.
 - Deterministic skill, linked-evidence, and reviewer-rubric matching with configurable/versioned weights, an explanation, and explicit eligible / not eligible / needs review states.
 - Published opportunity browsing and persisted applications.
+- Authenticated dashboard summary derived from the user's saved evidence, verified tasks, review states, recent activity, ideas, planned experiments and latest saved match.
 - Seeded example task and two opportunities. Set demo credentials to seed a clearly labelled sample user, Idea Lab response, and task submission. Sample evidence is excluded from matching; no reviews, customer observations, or employment outcomes are fabricated.
 
 ## API
@@ -28,7 +29,7 @@ See [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md) for the routes and response s
 
 ## Verification
 
-See [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md). Eleven backend unit/schema tests pass in this environment. The frontend build was checked previously; current backend changes have not changed frontend files. Full persisted journey checks are pending a running MongoDB instance. Live Gemini requests and browser E2E checks also need environment credentials and a running local API.
+See [`docs/TEST_PLAN.md`](docs/TEST_PLAN.md). Fourteen backend unit/schema tests pass in this environment. The Atlas connection and ping succeeded. Full persisted API journeys, live Gemini requests and browser E2E checks have not been exercised in this run; Gemini and browser checks also need credentials and a running local API.
 
 ## Limitations and planned scope
 
