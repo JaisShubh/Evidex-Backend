@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { createHash, randomBytes } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
@@ -22,12 +22,13 @@ import { fetchPublicGithubMetadata } from './services/github.service.js';
 import { suggestRubricScores } from './services/review-assist.service.js';
 
 export const app = express();
+app.set('trust proxy', 1);
 app.disable('x-powered-by'); app.use(helmet()); app.use(cors({ origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173' })); app.use(express.json({ limit: '128kb' }));
 app.use('/api', (req, res, next) => { res.setHeader('Cache-Control','no-store'); next(); });
 const limited = (_req, res) => res.status(429).json({ error: { code: 'RATE_LIMITED', message: 'Too many requests. Please try again later.' } });
-const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: 'draft-8', legacyHeaders: false, handler: limited });
-const aiLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false, handler: limited });
-const githubCheckLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 20, standardHeaders: 'draft-8', legacyHeaders: false, handler: limited });
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: 'draft-8', legacyHeaders: false, handler: limited, keyGenerator: ipKeyGenerator });
+const aiLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false, handler: limited, keyGenerator: ipKeyGenerator });
+const githubCheckLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 20, standardHeaders: 'draft-8', legacyHeaders: false, handler: limited, keyGenerator: ipKeyGenerator });
 const ok = (res, data, status=200) => res.status(status).json({ data });
 const cleanUser = (u) => ({ id: u._id, name: u.name, email: u.email, role: u.role, status: u.status, profile: u.profile });
 const asyncRoute = (fn) => (req,res,next) => Promise.resolve(fn(req,res,next)).catch(next);
