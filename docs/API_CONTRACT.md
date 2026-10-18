@@ -19,10 +19,11 @@ All endpoints are prefixed `/api`; protected routes require a bearer JWT. Succes
 | GET/POST/PATCH/DELETE | `/projects/me`, `/projects`, `/projects/:id` | Owner | List/create/update/archive own projects |
 | GET/POST | `/projects/:id/repository-checks` | Project owner | Check/read a history of public GitHub repository metadata; bounded to GitHub URLs and rate limited |
 | GET/POST/PATCH/DELETE | `/evidence/me`, `/evidence`, `/evidence/:id` | Owner | List/create/update/archive own evidence; task-submission evidence is system-managed |
-| GET | `/tasks`, `/tasks/:id` | User | List/read published tasks |
+| GET | `/tasks`, `/tasks/:id` | Student | List/read published tasks, including founder-created tasks available to all students |
 | GET/POST/PATCH/DELETE | `/admin/tasks`, `/admin/tasks/:id` | Admin | Manage drafts, publish/version tasks, or archive them |
 | POST | `/admin/tasks/generate-draft` | Admin | Generate a structured Gemini-assisted task draft (10 requests/hour); sample fallback is labelled; task remains unpublished |
-| POST | `/tasks/:id/attempts` | User | Start versioned attempt |
+| GET/POST/PATCH/DELETE | `/founder/tasks`, `/founder/tasks/:id` | Founder | Manage own public student tasks; new tasks are published by default, can be saved as drafts, and cannot change another owner's tasks |
+| POST | `/tasks/:id/attempts` | Student | Start versioned attempt |
 | POST | `/attempts/:id/submissions` | Owner | Create first submission or versioned resubmission after changes are requested |
 | GET | `/submissions/me`, `/attempts/:id/submissions` | Owner | Reload submission and attempt history |
 | GET | `/submissions/:id/verification` | Owner/reviewer | Read persisted verification and review history |

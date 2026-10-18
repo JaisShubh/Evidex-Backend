@@ -228,6 +228,31 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     assert.equal(publishedTask.status, 200, JSON.stringify(publishedTask.payload));
     assert.equal(publishedTask.payload.data.version, 2);
     const taskId = publishedTask.payload.data._id;
+    const founderTask = await call('POST', '/api/founder/tasks', {
+      token: founder.token,
+      body: { title: 'Founder-created task', goal: 'Complete a founder-provided brief.', description: 'Prepare a concise written summary.', requiredSkills: ['Research'], deliverables: [{ name: 'Summary', required: true }], rubric: [{ criterion: 'Clarity', points: 10, description: 'Clear summary.' }] },
+    });
+    assert.equal(founderTask.status, 201, JSON.stringify(founderTask.payload));
+    assert.equal(founderTask.payload.data.status, 'published');
+    assert.equal(String(founderTask.payload.data.ownerId), founder.user.id);
+    assert.equal((await call('GET', '/api/founder/tasks', { token: founder.token })).payload.data[0]._id, founderTask.payload.data._id);
+    assert.equal((await call('GET', '/api/founder/tasks', { token: adminToken })).status, 403);
+    assert.equal((await call('POST', '/api/founder/tasks', { token: student.token, body: {} })).status, 403);
+    assert.equal((await call('PATCH', `/api/founder/tasks/${founderTask.payload.data._id}`, { token: adminToken, body: { status: 'draft' } })).status, 403);
+    assert.equal((await call('GET', '/api/tasks', { token: founder.token })).status, 403);
+    assert.ok((await call('GET', '/api/tasks', { token: teamMate.token })).payload.data.some(task => task._id === founderTask.payload.data._id));
+    assert.equal((await call('POST', `/api/tasks/${founderTask.payload.data._id}/attempts`, { token: founder.token })).status, 403);
+    const founderAttempt = await call('POST', `/api/tasks/${founderTask.payload.data._id}/attempts`, { token: teamMate.token });
+    assert.equal(founderAttempt.status, 201, JSON.stringify(founderAttempt.payload));
+    const founderSubmission = await call('POST', `/api/attempts/${founderAttempt.payload.data._id}/submissions`, {
+      token: teamMate.token, body: { deliverables: [{ name: 'Summary', value: 'A student response to the founder-created task.' }] },
+    });
+    assert.equal(founderSubmission.status, 201, JSON.stringify(founderSubmission.payload));
+    const teamMateSubmissions = await call('GET', '/api/submissions/me', { token: teamMate.token });
+    assert.ok(teamMateSubmissions.payload.data.some(submission => submission._id === founderSubmission.payload.data._id));
+    assert.equal((await call('PATCH', `/api/founder/tasks/${founderTask.payload.data._id}`, { token: founder.token, body: { status: 'draft' } })).status, 200);
+    assert.equal((await call('POST', `/api/tasks/${founderTask.payload.data._id}/attempts`, { token: teamMate.token })).status, 404);
+    assert.equal((await call('DELETE', `/api/founder/tasks/${founderTask.payload.data._id}`, { token: founder.token })).payload.data.status, 'archived');
     const attempt = await call('POST', `/api/tasks/${taskId}/attempts`, { token: student.token });
     assert.equal(attempt.status, 201, JSON.stringify(attempt.payload));
     const attemptId = attempt.payload.data._id;
@@ -405,7 +430,7 @@ test('MongoDB-backed API journeys and access controls', { skip: !enabled && 'Set
     assert.equal(acceptedInvitation.status, 200);
     assert.ok(acceptedInvitation.payload.data.consentAt);
     assert.equal((await call('GET', `/api/briefs/${briefId}`, { token: student.token })).status, 200);
-    assert.equal((await call('GET', `/api/tasks/${briefTaskId}`, { token: reviewerUser.token })).status, 404);
+    assert.equal((await call('GET', `/api/tasks/${briefTaskId}`, { token: reviewerUser.token })).status, 403);
     assert.equal((await call('GET', `/api/tasks/${briefTaskId}`, { token: student.token })).status, 200);
     const team = await call('POST', '/api/teams', { token: student.token, body: { briefId, name: 'Research team', goal: 'Prepare a practical evidence-backed plan.', requiredSkills: ['Research'], maxMembers: 2 } });
     assert.equal(team.status, 201, JSON.stringify(team.payload));

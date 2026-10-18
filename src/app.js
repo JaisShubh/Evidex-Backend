@@ -230,9 +230,32 @@ app.delete('/api/admin/tasks/:id',requireRole('admin'),asyncRoute(async(req,res)
   await task.save();
   ok(res,{id:task.id,status:task.status,version:task.version});
 }));
-app.get('/api/tasks',asyncRoute(async(req,res)=>{const invitations=await Invitation.find({recipientId:req.user.id,status:'accepted'}).select('briefId');const briefIds=invitations.map(item=>item.briefId);ok(res,await Task.find({status:'published',$or:[{visibility:'public'},{visibility:{$exists:false}},{ownerId:req.user.id},{briefId:{$in:briefIds}}]}).sort({createdAt:-1}));}));
-app.get('/api/tasks/:id',asyncRoute(async(req,res)=>{const task=await Task.findOne({_id:req.params.id,status:'published'});if(!task||!await canAccessTask(req.user,task))return res.status(404).json({error:{code:'NOT_FOUND',message:'Task not found.'}});ok(res,task);}));
-app.post('/api/tasks/:id/attempts',asyncRoute(async(req,res)=>{
+app.get('/api/founder/tasks',requireRole('founder'),asyncRoute(async(req,res)=>ok(res,await Task.find({ownerId:req.user.id,status:{$ne:'archived'}}).sort({updatedAt:-1}))));
+app.post('/api/founder/tasks',requireRole('founder'),asyncRoute(async(req,res)=>{
+  const fields=taskSchema.parse(req.body);
+  const task=await Task.create({...fields,category:fields.category||'General',allowedTools:fields.allowedTools||'Any tools; disclose AI assistance.',ownerId:req.user.id,visibility:'public',version:1,status:fields.status||'published'});
+  ok(res,task,201);
+}));
+app.patch('/api/founder/tasks/:id',requireRole('founder'),asyncRoute(async(req,res)=>{
+  const fields=taskPatchSchema.parse(req.body);
+  const task=await Task.findOne({_id:req.params.id,ownerId:req.user.id,status:{$ne:'archived'}});
+  if(!task)return res.status(404).json({error:{code:'NOT_FOUND',message:'Task not found.'}});
+  Object.assign(task,fields);
+  task.version+=1;
+  await task.save();
+  ok(res,task);
+}));
+app.delete('/api/founder/tasks/:id',requireRole('founder'),asyncRoute(async(req,res)=>{
+  const task=await Task.findOne({_id:req.params.id,ownerId:req.user.id,status:{$ne:'archived'}});
+  if(!task)return res.status(404).json({error:{code:'NOT_FOUND',message:'Task not found.'}});
+  task.status='archived';
+  task.version+=1;
+  await task.save();
+  ok(res,{id:task.id,status:task.status,version:task.version});
+}));
+app.get('/api/tasks',requireRole('student'),asyncRoute(async(req,res)=>{const invitations=await Invitation.find({recipientId:req.user.id,status:'accepted'}).select('briefId');const briefIds=invitations.map(item=>item.briefId);ok(res,await Task.find({status:'published',$or:[{visibility:'public'},{visibility:{$exists:false}},{ownerId:req.user.id},{briefId:{$in:briefIds}}]}).sort({createdAt:-1}));}));
+app.get('/api/tasks/:id',requireRole('student'),asyncRoute(async(req,res)=>{const task=await Task.findOne({_id:req.params.id,status:'published'});if(!task||!await canAccessTask(req.user,task))return res.status(404).json({error:{code:'NOT_FOUND',message:'Task not found.'}});ok(res,task);}));
+app.post('/api/tasks/:id/attempts',requireRole('student'),asyncRoute(async(req,res)=>{
   const task=await Task.findOne({_id:req.params.id,status:'published'});
   if(!task||!await canAccessTask(req.user,task))return res.status(404).json({error:{code:'NOT_FOUND',message:'Task not found.'}});
   const taskSnapshot={title:task.title,goal:task.goal,description:task.description,category:task.category,difficulty:task.difficulty,requiredSkills:task.requiredSkills,deliverables:task.deliverables.map(({name,required})=>({name,required})),rubric:task.rubric.map(({criterion,points,description})=>({criterion,points,description})),allowedTools:task.allowedTools};
