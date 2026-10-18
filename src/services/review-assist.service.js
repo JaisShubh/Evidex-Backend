@@ -27,9 +27,7 @@ export async function suggestRubricScores(task, submission, options = {}) {
     const parsed=resultSchema.parse(JSON.parse(response.text));
     return {source:'gemini',model,promptVersion:'1',scores:parsed.scores.map(item=>({...item,maxScore:maxByCriterion.get(item.criterion)})),summary:parsed.summary};
   }catch(err){
-    // #region agent log
-    fetch('http://127.0.0.1:7676/ingest/e70e87b2-7ab0-43a9-8dce-a651dd7efd6a',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'526782'},body:JSON.stringify({sessionId:'526782',runId:'pre-fix',hypothesisId:'C',location:'review-assist.service.js:catch',message:'suggestRubricScores failed',data:{hasApiKey:Boolean(apiKey),model,status:err?.status||null,name:err?.name||null,isZod:err?.name==='ZodError',msg:String(err?.message||'').slice(0,180)},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
+    console.error('[gemini] suggestRubricScores failed:', err?.status, err?.message);
     return sample;
   }
 }

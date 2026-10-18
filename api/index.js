@@ -21,12 +21,6 @@ async function ensureDatabaseConnection() {
 }
 
 export default async function handler(req, res) {
-  const path = String(req.url || '');
-  if (/deconstruct|generate-draft|score-suggestions/.test(path)) {
-    // #region agent log
-    fetch('http://127.0.0.1:7676/ingest/e70e87b2-7ab0-43a9-8dce-a651dd7efd6a',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'526782'},body:JSON.stringify({sessionId:'526782',runId:'pre-fix',hypothesisId:'A',location:'api/index.js:handler',message:'serverless AI route',data:{path,hasGeminiKey:Boolean(process.env.GEMINI_API_KEY),hasGeminiModel:Boolean(process.env.GEMINI_MODEL),vercelEnv:process.env.VERCEL_ENV||null},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
-  }
   if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
     return res.status(500).json({
       error: { code: 'SERVER_CONFIGURATION_ERROR', message: 'Server is not configured.' },

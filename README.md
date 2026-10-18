@@ -29,7 +29,7 @@ API: `http://localhost:4000`; UI: `http://localhost:5173`. `CLIENT_ORIGIN` and `
 
 See [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md) for the routes and response shape. Protected routes require `Authorization: Bearer <token>`. Success responses use `{data}`; errors use `{error:{code,message}}`.
 
-The API closes its HTTP listener and MongoDB connection on `SIGINT` or `SIGTERM`, with a 10-second forced-connection-close fallback. Production deployment still needs a target host, production secrets, allowed client origin, and appropriate shared rate-limit storage when running multiple instances.
+The API closes its HTTP listener and MongoDB connection on `SIGINT` or `SIGTERM`, with a 10-second forced-connection-close fallback. For Vercel, deploy `Backend` as the API project root and set `GEMINI_API_KEY`, `GEMINI_MODEL`, `MONGODB_URI`, and a `JWT_SECRET` of at least 32 characters in the backend project's environment settings. Deploy `Frontend` separately; it calls the backend through its same-origin `/api` rewrite. Set `CLIENT_ORIGIN` to the frontend origin for direct cross-origin API use. Redeploy after changing environment variables. Use appropriate shared rate-limit storage when running multiple instances.
 
 ## Privileged accounts
 
